@@ -29,30 +29,35 @@ export default function Gallery3D({
   initialCollectionId,
 }: Gallery3DProps) {
   const mountRef = useRef<HTMLDivElement>(null);
+  const radarDotRef = useRef<HTMLDivElement | null>(null);
   const [activeArtwork, setActiveArtwork] = useState<ArtworkPrint | null>(null);
   const [activeCollection, setActiveCollection] = useState(ART_COLLECTIONS[0]);
   const [isAudioEnabled, setIsAudioEnabled] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [hoveredPrint, setHoveredPrint] = useState<ArtworkPrint | null>(null);
-  const [currentProgressPct, setCurrentProgressPct] = useState(0);
   const [isAtGate, setIsAtGate] = useState(true);
   const [currentArtworkIndex, setCurrentArtworkIndex] = useState(0);
   // OPTIONAL Face-to-Face toggle - disabled by default so walking is 100% free & unbroken!
   const [isFaceToFaceMode, setIsFaceToFaceMode] = useState(false);
 
-  // State reference - pure, stable, zero camera hijacking
+  // State reference - pure, stable, zero camera hijacking, physics-based velocity
   const stateRef = useRef({
     progress: 0.992,
     targetProgress: 0.992,
+    hasTarget: false,
+    velocity: 0,
     isPointerDown: false,
     startX: 0,
+    startY: 0,
     lastX: 0,
+    lastY: 0,
     mouseNormX: 0,
     mouseNormY: 0,
     keys: new Set<string>(),
     artworkIndex: 0,
     isFaceToFace: false, // controlled explicitly by user, never hijacked automatically!
-    faceLookTarget: new THREE.Vector3(),
+    activeArtId: '',
+    isAtGate: true,
   });
 
   // Keep stateRef.isFaceToFace synced with isFaceToFaceMode
@@ -104,6 +109,8 @@ export default function Gallery3D({
     const targetItem = exhibitionItems[nextIdx];
     if (targetItem) {
       stateRef.current.targetProgress = targetItem.t;
+      stateRef.current.hasTarget = true;
+      stateRef.current.velocity = 0;
       setActiveArtwork(targetItem.artwork);
       const col = ART_COLLECTIONS.find((c) => c.id === targetItem.artwork.collectionId);
       if (col) setActiveCollection(col);
@@ -520,11 +527,15 @@ export default function Gallery3D({
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
 
-    // 100% UNBROKEN, FREE MOUSE & WALKING CONTROLS
+    // 100% UNBROKEN, FLUID VIDEO-GAME MOUSE & WALKING CONTROLS
     const onMouseDown = (e: MouseEvent) => {
+      if ((e.target as HTMLElement)?.closest('button')) return;
       stateRef.current.isPointerDown = true;
       stateRef.current.startX = e.clientX;
+      stateRef.current.startY = e.clientY;
       stateRef.current.lastX = e.clientX;
+      stateRef.current.lastY = e.clientY;
+      stateRef.current.hasTarget = false;
       container.style.cursor = 'grabbing';
     };
 
@@ -535,21 +546,28 @@ export default function Gallery3D({
       pointer.x = normX;
       pointer.y = normY;
 
-      // Natural, pleasant mouse look glance
+      // Natural, pleasant mouse look glance (normX > 0 looks right, normY > 0 looks up)
       stateRef.current.mouseNormX = normX;
       stateRef.current.mouseNormY = normY;
 
       if (stateRef.current.isPointerDown) {
         const deltaX = e.clientX - stateRef.current.lastX;
+        const deltaY = e.clientY - stateRef.current.lastY;
         stateRef.current.lastX = e.clientX;
+        stateRef.current.lastY = e.clientY;
 
-        // Moving mouse/dragging automatically exits face-to-face if active so walk is never stuck!
-        if (stateRef.current.isFaceToFace && Math.abs(deltaX) > 4) {
+        // Moving mouse/dragging automatically exits face-to-face mode if active
+        if (stateRef.current.isFaceToFace && (Math.abs(deltaX) > 4 || Math.abs(deltaY) > 4)) {
           stateRef.current.isFaceToFace = false;
           setIsFaceToFaceMode(false);
         }
 
-        stateRef.current.targetProgress -= deltaX * 0.0012;
+        // Dragging UP (-deltaY) pushes you FORWARD along the corridor!
+        // Dragging DOWN (+deltaY) pulls you BACKWARD!
+        // Dragging LEFT/RIGHT also walks/pans!
+        const forwardPush = -deltaY * 0.00028 - deltaX * 0.00018;
+        stateRef.current.velocity += forwardPush;
+        stateRef.current.hasTarget = false;
       }
     };
 
@@ -558,18 +576,22 @@ export default function Gallery3D({
       container.style.cursor = 'grab';
     };
 
-    // Scroll wheel = fluid, unbroken walk forward / backward
+    // Scroll wheel / touchpad = fluid, unbroken walk forward / backward with smooth inertia
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      const delta = Math.abs(e.deltaY) > Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
-
-      // Scrolling automatically returns to free corridor walk
       if (stateRef.current.isFaceToFace) {
         stateRef.current.isFaceToFace = false;
         setIsFaceToFaceMode(false);
       }
+      stateRef.current.hasTarget = false;
 
-      stateRef.current.targetProgress += delta * 0.0009;
+      // In browser wheel: scrolling down has positive deltaY
+      // Normalize wheel delta for mouse wheels (+/-100) vs smooth trackpads (+/-5)
+      const rawDelta = Math.abs(e.deltaY) > Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+      const normalizedDelta = Math.sign(rawDelta) * Math.min(Math.abs(rawDelta), 100);
+
+      // Scroll forward pushes velocity forward
+      stateRef.current.velocity += normalizedDelta * 0.000045;
     };
 
     const onKeyDown = (e: KeyboardEvent) => {
@@ -593,7 +615,10 @@ export default function Gallery3D({
     };
 
     const onClick = (e: MouseEvent) => {
-      if (Math.abs(e.clientX - stateRef.current.startX) > 6) return;
+      if (
+        Math.hypot(e.clientX - stateRef.current.startX, e.clientY - stateRef.current.startY) > 8
+      )
+        return;
 
       raycaster.setFromCamera(pointer, camera);
       const hits = raycaster.intersectObjects(clickableMeshes, false);
@@ -604,24 +629,36 @@ export default function Gallery3D({
           const idx = hit.userData.index;
           stateRef.current.artworkIndex = idx;
           stateRef.current.targetProgress = hit.userData.t;
+          stateRef.current.hasTarget = true;
+          stateRef.current.velocity = 0;
           setCurrentArtworkIndex(idx);
           onSelectArtwork(hit.userData.artwork);
+          return;
         }
       }
+
+      // If clicked on open corridor / floor: walk forward a step!
+      stateRef.current.velocity += 0.0035;
+      stateRef.current.hasTarget = false;
     };
 
     let touchStartX = 0;
+    let touchStartY = 0;
     const onTouchStart = (e: TouchEvent) => {
       touchStartX = e.touches[0].clientX;
+      touchStartY = e.touches[0].clientY;
+      stateRef.current.hasTarget = false;
     };
     const onTouchMove = (e: TouchEvent) => {
       const deltaX = touchStartX - e.touches[0].clientX;
+      const deltaY = touchStartY - e.touches[0].clientY;
       touchStartX = e.touches[0].clientX;
+      touchStartY = e.touches[0].clientY;
       if (stateRef.current.isFaceToFace) {
         stateRef.current.isFaceToFace = false;
         setIsFaceToFaceMode(false);
       }
-      stateRef.current.targetProgress += deltaX * 0.0016;
+      stateRef.current.velocity += deltaY * 0.0003 + deltaX * 0.0003;
     };
 
     container.addEventListener('mousedown', onMouseDown);
@@ -641,11 +678,13 @@ export default function Gallery3D({
       if (foundIdx !== -1) {
         stateRef.current.artworkIndex = foundIdx;
         stateRef.current.targetProgress = exhibitionItems[foundIdx].t;
+        stateRef.current.hasTarget = true;
+        stateRef.current.velocity = 0;
         setCurrentArtworkIndex(foundIdx);
       }
     }
 
-    // ANIMATION LOOP - 100% UNBROKEN, FREE WALKING
+    // ANIMATION LOOP - 100% UNBROKEN, FREE WALKING WITH PHYSICS VELOCITY
     let animationFrameId: number;
     let lastRaycastTime = 0;
 
@@ -656,31 +695,61 @@ export default function Gallery3D({
 
       const keys = stateRef.current.keys;
       const isShift = keys.has('ShiftLeft') || keys.has('ShiftRight');
-      const keyStep = isShift ? 0.003 : 0.0016;
 
       if (keys.has('KeyW') || keys.has('ArrowUp')) {
         if (stateRef.current.isFaceToFace) {
           stateRef.current.isFaceToFace = false;
           setIsFaceToFaceMode(false);
         }
-        stateRef.current.targetProgress += keyStep;
+        stateRef.current.velocity += isShift ? 0.0007 : 0.00035;
+        stateRef.current.hasTarget = false;
       }
       if (keys.has('KeyS') || keys.has('ArrowDown')) {
         if (stateRef.current.isFaceToFace) {
           stateRef.current.isFaceToFace = false;
           setIsFaceToFaceMode(false);
         }
-        stateRef.current.targetProgress -= keyStep;
+        stateRef.current.velocity -= isShift ? 0.0007 : 0.00035;
+        stateRef.current.hasTarget = false;
       }
 
-      stateRef.current.progress +=
-        (stateRef.current.targetProgress - stateRef.current.progress) * 0.12;
+      // Shortest cyclic path if navigating to a specific target artwork
+      if (stateRef.current.hasTarget) {
+        let diff = stateRef.current.targetProgress - stateRef.current.progress;
+        while (diff > 0.5) diff -= 1;
+        while (diff < -0.5) diff += 1;
 
-      const p = ((stateRef.current.progress % 1) + 1) % 1;
-      setCurrentProgressPct(p);
+        if (Math.abs(diff) < 0.0004) {
+          stateRef.current.progress = stateRef.current.targetProgress;
+          stateRef.current.hasTarget = false;
+        } else {
+          stateRef.current.progress += diff * 0.12;
+        }
+      } else {
+        // Free fluid walking with smooth friction decay
+        stateRef.current.velocity = Math.max(-0.012, Math.min(0.012, stateRef.current.velocity));
+        stateRef.current.progress += stateRef.current.velocity;
+        stateRef.current.velocity *= 0.88;
+        if (Math.abs(stateRef.current.velocity) < 0.000005) {
+          stateRef.current.velocity = 0;
+        }
+      }
 
+      // Always normalize progress strictly between 0 and 1
+      stateRef.current.progress = ((stateRef.current.progress % 1) + 1) % 1;
+      const p = stateRef.current.progress;
+
+      // Update radar without React re-render overhead
+      if (radarDotRef.current) {
+        radarDotRef.current.style.transform = `rotate(${p * 360}deg) translate(9px) rotate(-${p * 360}deg)`;
+      }
+
+      // Check gate state only on change
       const atGate = p < 0.04 || p > 0.965;
-      setIsAtGate(atGate);
+      if (atGate !== stateRef.current.isAtGate) {
+        stateRef.current.isAtGate = atGate;
+        setIsAtGate(atGate);
+      }
 
       // CAMERA POSITION (Stays smoothly in corridor centerline at eye-level)
       const eyeHeight = 2.0;
@@ -709,19 +778,20 @@ export default function Gallery3D({
         }
       });
 
-      // Default: 100% Free corridor look, completely follows user's mouse
+      // Default: 100% Free corridor look, follows user's mouse
       const forwardLookTarget = camPos
         .clone()
         .add(forwardTangent.clone().multiplyScalar(12.0));
 
+      // Natural mouse look: move mouse right -> look right, move mouse left -> look left
       forwardLookTarget.add(
-        corridorNormal.clone().multiplyScalar(-stateRef.current.mouseNormX * 3.0)
+        corridorNormal.clone().multiplyScalar(stateRef.current.mouseNormX * 3.5)
       );
-      forwardLookTarget.y += stateRef.current.mouseNormY * 0.8;
+      forwardLookTarget.y += stateRef.current.mouseNormY * 1.0;
 
       let targetGazePoint = forwardLookTarget;
 
-      // ONLY if user explicitly enabled Face-to-Face mode, look at the painting
+      // ONLY if user explicitly enabled Face-to-Face mode, look directly at the painting
       if (stateRef.current.isFaceToFace && !atGate) {
         const artStop = paintingPositions[closestIdx];
         if (artStop) {
@@ -729,7 +799,6 @@ export default function Gallery3D({
         }
       }
 
-      // Smooth camera look without any snapping
       smoothLookTarget.lerp(targetGazePoint, 0.12);
       camera.lookAt(smoothLookTarget);
 
@@ -752,10 +821,11 @@ export default function Gallery3D({
         }
       }
 
-      // Update active artwork card at bottom
-      if (closestItem && closestItem.artwork.id !== activeArtwork?.id) {
-        setActiveArtwork(closestItem.artwork);
+      // Update active artwork card only when artwork actually changes
+      if (closestItem && closestItem.artwork.id !== stateRef.current.activeArtId) {
+        stateRef.current.activeArtId = closestItem.artwork.id;
         stateRef.current.artworkIndex = closestIdx;
+        setActiveArtwork(closestItem.artwork);
         setCurrentArtworkIndex(closestIdx);
         const col = ART_COLLECTIONS.find(
           (c) => c.id === closestItem.artwork.collectionId
@@ -819,6 +889,8 @@ export default function Gallery3D({
     if (itemIdx !== -1) {
       stateRef.current.artworkIndex = itemIdx;
       stateRef.current.targetProgress = exhibitionItems[itemIdx].t;
+      stateRef.current.hasTarget = true;
+      stateRef.current.velocity = 0;
       setCurrentArtworkIndex(itemIdx);
       if (stateRef.current.isFaceToFace) {
         stateRef.current.isFaceToFace = false;
@@ -829,6 +901,8 @@ export default function Gallery3D({
 
   const walkThroughGate = () => {
     stateRef.current.targetProgress = 0.05;
+    stateRef.current.hasTarget = true;
+    stateRef.current.velocity = 0;
     if (stateRef.current.isFaceToFace) {
       stateRef.current.isFaceToFace = false;
       setIsFaceToFaceMode(false);
@@ -846,6 +920,8 @@ export default function Gallery3D({
           <button
             onClick={() => {
               stateRef.current.targetProgress = 0.992;
+              stateRef.current.hasTarget = true;
+              stateRef.current.velocity = 0;
               setIsFaceToFaceMode(false);
             }}
             className='px-3.5 py-1.5 text-xs uppercase tracking-wider font-bold rounded-full bg-amber-500 hover:bg-amber-600 text-white shadow-md transition-all flex items-center gap-1.5 whitespace-nowrap'
@@ -1014,11 +1090,10 @@ export default function Gallery3D({
       <div className='absolute bottom-6 right-6 z-20 hidden sm:flex items-center gap-3 pointer-events-none text-zinc-600 bg-white/85 backdrop-blur-md px-4 py-2.5 rounded-2xl border border-zinc-200/80 shadow-md'>
         <div className='relative w-7 h-7 rounded-full border-2 border-zinc-300 flex items-center justify-center'>
           <div
-            className='absolute w-2 h-2 rounded-full bg-amber-500 shadow-sm transition-all duration-75'
+            ref={radarDotRef}
+            className='absolute w-2 h-2 rounded-full bg-amber-500 shadow-sm transition-transform duration-75'
             style={{
-              transform: `rotate(${currentProgressPct * 360}deg) translate(9px) rotate(-${
-                currentProgressPct * 360
-              }deg)`,
+              transform: 'rotate(0deg) translate(9px) rotate(0deg)',
             }}
           />
           <MapPin size={10} className='text-zinc-400' />
