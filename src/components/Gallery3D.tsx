@@ -12,7 +12,9 @@ import {
   Sparkles,
   MousePointer,
   DoorOpen,
-  ArrowRight
+  ArrowRight,
+  UserCheck,
+  Compass
 } from 'lucide-react';
 
 interface Gallery3DProps {
@@ -34,10 +36,12 @@ export default function Gallery3D({
   const [hoveredPrint, setHoveredPrint] = useState<ArtworkPrint | null>(null);
   const [currentProgressPct, setCurrentProgressPct] = useState(0);
   const [isAtGate, setIsAtGate] = useState(true);
+  const [isFaceToFace, setIsFaceToFace] = useState(false);
+  const [currentIndex, setCurrentIndex] = useState(0);
 
-  // State reference - simple, stable, zero-garbage
+  // Motion and Camera state
   const stateRef = useRef({
-    progress: 0.992, // Start right outside the grand gate looking through it!
+    progress: 0.992,
     targetProgress: 0.992,
     isPointerDown: false,
     startX: 0,
@@ -45,9 +49,14 @@ export default function Gallery3D({
     mouseNormX: 0,
     mouseNormY: 0,
     keys: new Set<string>(),
+    viewMode: 'corridor' as 'corridor' | 'face-to-face',
+    blendFactor: 0, // 0 = corridor, 1 = face-to-face
+    faceCamPos: new THREE.Vector3(),
+    faceLookTarget: new THREE.Vector3(),
+    artworkIndex: 0,
   });
 
-  // Exhibition artworks list (distributed along corridor starting after the grand gate)
+  // Exhibition artworks distributed on Left & Right Walls
   const exhibitionItems = React.useMemo(() => {
     const list: {
       artwork: ArtworkPrint;
@@ -55,25 +64,101 @@ export default function Gallery3D({
       collectionTitle: string;
       wallSide: 'left' | 'right';
       t: number;
+      artPos: THREE.Vector3;
+      inwardNorm: THREE.Vector3;
     }[] = [];
 
     const prints = ALL_PRINTS.slice(0, 36);
     const total = prints.length;
 
-    // Distribute between t = 0.05 and t = 0.95 so the grand gate at t = 0 has a clear entrance foyer!
+    // Spline reference for precomputing positions
+    const pts = [
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(28, 0, 16),
+      new THREE.Vector3(60, 0, 0),
+      new THREE.Vector3(80, 0, -32),
+      new THREE.Vector3(65, 0, -70),
+      new THREE.Vector3(22, 0, -88),
+      new THREE.Vector3(-22, 0, -88),
+      new THREE.Vector3(-65, 0, -70),
+      new THREE.Vector3(-80, 0, -32),
+      new THREE.Vector3(-60, 0, 0),
+      new THREE.Vector3(-28, 0, 16),
+    ];
+    const spline = new THREE.CatmullRomCurve3(pts, true, 'centripetal', 0.5);
+    const up = new THREE.Vector3(0, 1, 0);
+    const tunnelHalfWidth = 4.0;
+
     prints.forEach((p, idx) => {
       const t = 0.05 + (idx / total) * 0.9;
+      const pt = spline.getPointAt(t);
+      const tan = spline.getTangentAt(t);
+      const norm = new THREE.Vector3().crossVectors(tan, up).normalize();
+      const wallSide: 'left' | 'right' = idx % 2 === 0 ? 'right' : 'left';
+
+      const wallOffset = wallSide === 'right' ? tunnelHalfWidth - 0.08 : -tunnelHalfWidth + 0.08;
+      const artPos = pt.clone().add(norm.clone().multiplyScalar(wallOffset));
+      artPos.y = 2.1; // Museum eye level
+
+      const inwardNorm = wallSide === 'right' ? norm.clone().negate() : norm.clone();
+
       list.push({
         artwork: p,
         collectionId: p.collectionId,
         collectionTitle: p.collectionTitle,
-        wallSide: idx % 2 === 0 ? 'right' : 'left',
+        wallSide,
         t,
+        artPos,
+        inwardNorm,
       });
     });
 
     return list;
   }, []);
+
+  // Set up Face-to-Face target for a specific artwork index
+  const setFaceToFaceTarget = useCallback((index: number) => {
+    const item = exhibitionItems[index];
+    if (!item) return;
+
+    stateRef.current.artworkIndex = index;
+    stateRef.current.viewMode = 'face-to-face';
+    stateRef.current.targetProgress = item.t;
+
+    // Optimal standing spot in front of the artwork:
+    // Stand 3.2 units away along the inward normal vector, directly facing the canvas
+    const viewingDistance = 3.2;
+    stateRef.current.faceCamPos.copy(
+      item.artPos.clone().add(item.inwardNorm.clone().multiplyScalar(viewingDistance))
+    );
+    // Eye height of viewer matches center of painting
+    stateRef.current.faceCamPos.y = 2.1;
+
+    // Look target is the exact center of the artwork canvas
+    stateRef.current.faceLookTarget.copy(item.artPos);
+
+    setActiveArtwork(item.artwork);
+    const col = ART_COLLECTIONS.find((c) => c.id === item.artwork.collectionId);
+    if (col) setActiveCollection(col);
+
+    setIsFaceToFace(true);
+    setCurrentIndex(index);
+    setIsAtGate(false);
+  }, [exhibitionItems]);
+
+  // Handle "<" (Previous Artwork Face-to-Face)
+  const handlePrevFaceToFace = useCallback(() => {
+    const total = exhibitionItems.length;
+    const newIdx = (stateRef.current.artworkIndex - 1 + total) % total;
+    setFaceToFaceTarget(newIdx);
+  }, [exhibitionItems.length, setFaceToFaceTarget]);
+
+  // Handle ">" (Next Artwork Face-to-Face)
+  const handleNextFaceToFace = useCallback(() => {
+    const total = exhibitionItems.length;
+    const newIdx = (stateRef.current.artworkIndex + 1) % total;
+    setFaceToFaceTarget(newIdx);
+  }, [exhibitionItems.length, setFaceToFaceTarget]);
 
   // Web Audio Ambiance
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -273,20 +358,13 @@ export default function Gallery3D({
 
     // ==========================================
     // 🏛️ THE GRAND ART-DECORATED MAIN ENTRANCE GATE
-    // Placed at t = 0 at the threshold of the tunnel!
     // ==========================================
     const gatePoint = tunnelSpline.getPointAt(0);
     const gateTan = tunnelSpline.getTangentAt(0);
-    const gateNorm = new THREE.Vector3().crossVectors(gateTan, upVector).normalize();
-
     const grandGateGroup = new THREE.Group();
     grandGateGroup.position.copy(gatePoint);
+    grandGateGroup.lookAt(gatePoint.clone().add(gateTan));
 
-    // Orient group along the entrance normal and tangent
-    const gateLookTarget = gatePoint.clone().add(gateTan);
-    grandGateGroup.lookAt(gateLookTarget);
-
-    // 1. Grand Left & Right Fluted Obsidian & Gold Pillars
     const pillarWidth = 0.85;
     const pillarDepth = 0.85;
     const pillarHeight = tunnelHeight + 0.3;
@@ -297,9 +375,8 @@ export default function Gallery3D({
       metalness: 0.4,
     });
 
-    // Gold brass accents material
     const goldMat = new THREE.MeshStandardMaterial({
-      color: 0xd4af37, // Rich 24k polished gold
+      color: 0xd4af37,
       roughness: 0.2,
       metalness: 0.85,
     });
@@ -309,15 +386,10 @@ export default function Gallery3D({
     leftPillar.position.set(-tunnelHalfWidth + 0.35, pillarHeight / 2, 0);
     grandGateGroup.add(leftPillar);
 
-    // Left Pillar Gold Rings & Capital
     const goldRingGeo = new THREE.BoxGeometry(pillarWidth + 0.1, 0.15, pillarDepth + 0.1);
     const leftGoldCapital = new THREE.Mesh(goldRingGeo, goldMat);
     leftGoldCapital.position.set(-tunnelHalfWidth + 0.35, pillarHeight - 0.15, 0);
     grandGateGroup.add(leftGoldCapital);
-
-    const leftGoldBase = new THREE.Mesh(goldRingGeo, goldMat);
-    leftGoldBase.position.set(-tunnelHalfWidth + 0.35, 0.2, 0);
-    grandGateGroup.add(leftGoldBase);
 
     // Right Pillar
     const rightPillar = new THREE.Mesh(pillarGeo, pillarMat);
@@ -328,11 +400,7 @@ export default function Gallery3D({
     rightGoldCapital.position.set(tunnelHalfWidth - 0.35, pillarHeight - 0.15, 0);
     grandGateGroup.add(rightGoldCapital);
 
-    const rightGoldBase = new THREE.Mesh(goldRingGeo, goldMat);
-    rightGoldBase.position.set(tunnelHalfWidth - 0.35, 0.2, 0);
-    grandGateGroup.add(rightGoldBase);
-
-    // 2. Grand Lintel Archway Beam Across Top
+    // Lintel Archway
     const archSpan = tunnelHalfWidth * 2 - 0.2;
     const lintelHeight = 1.35;
     const lintelGeo = new THREE.BoxGeometry(archSpan, lintelHeight, 0.65);
@@ -340,56 +408,25 @@ export default function Gallery3D({
     lintelMesh.position.set(0, tunnelHeight - lintelHeight / 2 + 0.15, 0);
     grandGateGroup.add(lintelMesh);
 
-    // Gold trim molding on lintel
-    const lintelGoldTrimGeo = new THREE.BoxGeometry(archSpan + 0.1, 0.12, 0.75);
-    const lintelGoldTrim = new THREE.Mesh(lintelGoldTrimGeo, goldMat);
-    lintelGoldTrim.position.set(0, tunnelHeight - lintelHeight + 0.15, 0);
-    grandGateGroup.add(lintelGoldTrim);
-
-    const lintelGoldTop = new THREE.Mesh(lintelGoldTrimGeo, goldMat);
-    lintelGoldTop.position.set(0, tunnelHeight + 0.2, 0);
-    grandGateGroup.add(lintelGoldTop);
-
-    // 3. Ornate Lintel Banner Canvas with African Patterns & Gold Typography
+    // Lintel Banner Canvas
     const gateBannerCanvas = document.createElement('canvas');
     gateBannerCanvas.width = 1024;
     gateBannerCanvas.height = 256;
     const gctx = gateBannerCanvas.getContext('2d');
     if (gctx) {
-      // Dark obsidian brushed background
       gctx.fillStyle = '#0f0f11';
       gctx.fillRect(0, 0, 1024, 256);
-
-      // Gold geometric African mudcloth / chevron border trim
       gctx.strokeStyle = '#d4af37';
       gctx.lineWidth = 6;
       gctx.strokeRect(12, 12, 1000, 232);
       gctx.strokeRect(20, 20, 984, 216);
 
-      // Chevron pattern across top & bottom edges
-      gctx.fillStyle = '#d4af37';
-      for (let x = 32; x < 990; x += 28) {
-        gctx.beginPath();
-        gctx.moveTo(x, 26);
-        gctx.lineTo(x + 10, 36);
-        gctx.lineTo(x + 20, 26);
-        gctx.stroke();
-
-        gctx.beginPath();
-        gctx.moveTo(x, 226);
-        gctx.lineTo(x + 10, 216);
-        gctx.lineTo(x + 20, 226);
-        gctx.stroke();
-      }
-
-      // Main Exhibition Title
       gctx.fillStyle = '#f8f8fa';
       gctx.font = '900 38px -apple-system, sans-serif';
       gctx.textAlign = 'center';
       gctx.letterSpacing = '8px';
       gctx.fillText('SHUTABUG ART GALLERY', 512, 98);
 
-      // Subtitle
       gctx.fillStyle = '#d4af37';
       gctx.font = '700 22px -apple-system, sans-serif';
       gctx.letterSpacing = '6px';
@@ -405,111 +442,21 @@ export default function Gallery3D({
     const gateBannerGeo = new THREE.PlaneGeometry(archSpan - 0.4, lintelHeight - 0.25);
     const gateBannerMat = new THREE.MeshBasicMaterial({ map: gateBannerTex });
 
-    // Front facing banner (visible outside the gate before entering)
     const frontBannerMesh = new THREE.Mesh(gateBannerGeo, gateBannerMat);
     frontBannerMesh.position.set(0, tunnelHeight - lintelHeight / 2 + 0.15, -0.34);
-    frontBannerMesh.rotation.y = Math.PI; // Face incoming visitor
+    frontBannerMesh.rotation.y = Math.PI;
     grandGateGroup.add(frontBannerMesh);
 
-    // Back facing banner (visible if walking back)
-    const backBannerMesh = new THREE.Mesh(gateBannerGeo, gateBannerMat);
-    backBannerMesh.position.set(0, tunnelHeight - lintelHeight / 2 + 0.15, 0.34);
-    grandGateGroup.add(backBannerMesh);
-
-    // 4. Open Decorative Wrought Ironwork Gate Grilles (Parted open welcoming you in!)
-    const makeGateDoor = (isLeft: boolean) => {
-      const doorGroup = new THREE.Group();
-      const doorWidth = 2.4;
-      const doorHeight = 3.6;
-
-      // Heavy bronze frame
-      const doorFrameGeo = new THREE.BoxGeometry(doorWidth, doorHeight, 0.08);
-      const doorFrameMat = new THREE.MeshStandardMaterial({
-        color: 0x1c1917,
-        metalness: 0.7,
-        roughness: 0.3,
-      });
-
-      // Intricate vertical & diagonal lattice bars
-      for (let bar = 0; bar < 7; bar++) {
-        const barGeo = new THREE.BoxGeometry(0.04, doorHeight - 0.2, 0.06);
-        const barMesh = new THREE.Mesh(barGeo, goldMat);
-        barMesh.position.x = -doorWidth / 2 + 0.2 + bar * 0.33;
-        doorGroup.add(barMesh);
-      }
-
-      // Horizontal gold mid rails
-      for (let rail = 0; rail < 4; rail++) {
-        const railGeo = new THREE.BoxGeometry(doorWidth - 0.1, 0.05, 0.06);
-        const railMesh = new THREE.Mesh(railGeo, goldMat);
-        railMesh.position.y = -doorHeight / 2 + 0.5 + rail * 0.85;
-        doorGroup.add(railMesh);
-      }
-
-      // Door outer frame border
-      const borderTop = new THREE.Mesh(new THREE.BoxGeometry(doorWidth, 0.08, 0.08), doorFrameMat);
-      borderTop.position.y = doorHeight / 2;
-      doorGroup.add(borderTop);
-
-      const borderBottom = new THREE.Mesh(new THREE.BoxGeometry(doorWidth, 0.08, 0.08), doorFrameMat);
-      borderBottom.position.y = -doorHeight / 2;
-      doorGroup.add(borderBottom);
-
-      // Angled outwards into the corridor in welcoming parted pose
-      doorGroup.position.set(
-        isLeft ? -tunnelHalfWidth + 1.2 : tunnelHalfWidth - 1.2,
-        doorHeight / 2 + 0.1,
-        isLeft ? 0.8 : 0.8
-      );
-      doorGroup.rotation.y = isLeft ? 0.75 : -0.75;
-      return doorGroup;
-    };
-
-    grandGateGroup.add(makeGateDoor(true));
-    grandGateGroup.add(makeGateDoor(false));
-
-    // 5. Grand Entrance Lanterns / Sconces on Pillars
-    const lanternGeo = new THREE.CylinderGeometry(0.12, 0.16, 0.45, 8);
-    const lanternMat = new THREE.MeshBasicMaterial({ color: 0xffe6a3 });
-
-    const leftLantern = new THREE.Mesh(lanternGeo, lanternMat);
-    leftLantern.position.set(-tunnelHalfWidth + 0.8, 2.7, -0.45);
-    grandGateGroup.add(leftLantern);
-
-    const leftLanternLight = new THREE.PointLight(0xffd175, 1.8, 10);
-    leftLanternLight.position.copy(leftLantern.position);
-    grandGateGroup.add(leftLanternLight);
-
-    const rightLantern = new THREE.Mesh(lanternGeo, lanternMat);
-    rightLantern.position.set(tunnelHalfWidth - 0.8, 2.7, -0.45);
-    grandGateGroup.add(rightLantern);
-
-    const rightLanternLight = new THREE.PointLight(0xffd175, 1.8, 10);
-    rightLanternLight.position.copy(rightLantern.position);
-    grandGateGroup.add(rightLanternLight);
-
-    // 6. Luxury Crimson Velvet Carpet Runner on Entrance Floor
+    // Velvet carpet
     const carpetGeo = new THREE.PlaneGeometry(3.6, 12);
     const carpetMat = new THREE.MeshStandardMaterial({
-      color: 0x881337, // Rich deep burgundy velvet
+      color: 0x881337,
       roughness: 0.9,
     });
     const carpetMesh = new THREE.Mesh(carpetGeo, carpetMat);
     carpetMesh.rotation.x = -Math.PI / 2;
-    carpetMesh.position.set(0, 0.015, 2.5); // Runs from outside the gate forward into the hall
+    carpetMesh.position.set(0, 0.015, 2.5);
     grandGateGroup.add(carpetMesh);
-
-    // Gold trim on carpet borders
-    const carpetTrimGeo = new THREE.PlaneGeometry(0.08, 12);
-    const carpetLeftTrim = new THREE.Mesh(carpetTrimGeo, goldMat);
-    carpetLeftTrim.rotation.x = -Math.PI / 2;
-    carpetLeftTrim.position.set(-1.8, 0.018, 2.5);
-    grandGateGroup.add(carpetLeftTrim);
-
-    const carpetRightTrim = new THREE.Mesh(carpetTrimGeo, goldMat);
-    carpetRightTrim.rotation.x = -Math.PI / 2;
-    carpetRightTrim.position.set(1.8, 0.018, 2.5);
-    grandGateGroup.add(carpetRightTrim);
 
     scene.add(grandGateGroup);
 
@@ -517,7 +464,6 @@ export default function Gallery3D({
     const clickableMeshes: THREE.Mesh[] = [];
     const textureLoader = new THREE.TextureLoader();
 
-    // Reusable materials & geometries for paintings
     const frameGeo = new THREE.BoxGeometry(2.35, 3.15, 0.08);
     const frameMat = new THREE.MeshBasicMaterial({ color: 0x18181b });
     const matGeo = new THREE.PlaneGeometry(2.22, 3.02);
@@ -559,10 +505,7 @@ export default function Gallery3D({
 
     // POPULATE PAINTINGS ON LEFT AND RIGHT WALLS
     exhibitionItems.forEach((item, index) => {
-      const { artwork, wallSide, t } = item;
-      const pt = tunnelSpline.getPointAt(t);
-      const tan = tunnelSpline.getTangentAt(t);
-      const norm = new THREE.Vector3().crossVectors(tan, upVector).normalize();
+      const { artwork, artPos, inwardNorm } = item;
 
       const group = new THREE.Group();
 
@@ -588,7 +531,7 @@ export default function Gallery3D({
 
       const artMesh = new THREE.Mesh(artGeo, artMat);
       artMesh.position.z = 0.043;
-      artMesh.userData = { artwork, index, t };
+      artMesh.userData = { artwork, index, t: item.t };
       group.add(artMesh);
       clickableMeshes.push(artMesh);
 
@@ -599,19 +542,14 @@ export default function Gallery3D({
       plaqueMesh.position.set(1.15 + 0.85 / 2 + 0.15, -0.9, 0.01);
       group.add(plaqueMesh);
 
-      const wallOffset = wallSide === 'right' ? tunnelHalfWidth - 0.08 : -tunnelHalfWidth + 0.08;
-      const pos = pt.clone().add(norm.clone().multiplyScalar(wallOffset));
-      pos.y = 2.1;
-      group.position.copy(pos);
-
-      const inwardNormal = wallSide === 'right' ? norm.clone().negate() : norm.clone();
-      const lookTarget = pos.clone().add(inwardNormal);
+      group.position.copy(artPos);
+      const lookTarget = artPos.clone().add(inwardNorm);
       group.lookAt(lookTarget);
 
       scene.add(group);
     });
 
-    // RAYCASTER (PRE-ALLOCATED)
+    // RAYCASTER
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
 
@@ -636,6 +574,13 @@ export default function Gallery3D({
       if (stateRef.current.isPointerDown) {
         const deltaX = e.clientX - stateRef.current.lastX;
         stateRef.current.lastX = e.clientX;
+
+        // If in face-to-face mode, horizontal drag smoothly transitions back to corridor walk
+        if (stateRef.current.viewMode === 'face-to-face' && Math.abs(deltaX) > 4) {
+          stateRef.current.viewMode = 'corridor';
+          setIsFaceToFace(false);
+        }
+
         stateRef.current.targetProgress -= deltaX * 0.0012;
       }
     };
@@ -648,12 +593,30 @@ export default function Gallery3D({
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       const delta = Math.abs(e.deltaY) > Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+
+      // Scrolling smoothly resumes corridor walking
+      if (stateRef.current.viewMode === 'face-to-face') {
+        stateRef.current.viewMode = 'corridor';
+        setIsFaceToFace(false);
+      }
+
       stateRef.current.targetProgress += delta * 0.0009;
     };
 
     const onKeyDown = (e: KeyboardEvent) => {
       stateRef.current.keys.add(e.code);
-      if (e.key === 'Enter' || e.key === 'Space') {
+
+      // Left arrow = Previous Face-to-Face artwork!
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        handlePrevFaceToFace();
+      }
+      // Right arrow = Next Face-to-Face artwork!
+      else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        handleNextFaceToFace();
+      }
+      else if (e.key === 'Enter' || e.key === 'Space') {
         if (activeArtwork) {
           onSelectArtwork(activeArtwork);
         }
@@ -672,8 +635,9 @@ export default function Gallery3D({
 
       if (hits.length > 0) {
         const hit = hits[0].object;
-        if (hit.userData?.artwork) {
-          stateRef.current.targetProgress = hit.userData.t;
+        if (hit.userData?.artwork && typeof hit.userData.index === 'number') {
+          // Clicking directly on an artwork locks onto it face-to-face!
+          setFaceToFaceTarget(hit.userData.index);
           onSelectArtwork(hit.userData.artwork);
         }
       }
@@ -686,6 +650,10 @@ export default function Gallery3D({
     const onTouchMove = (e: TouchEvent) => {
       const deltaX = touchStartX - e.touches[0].clientX;
       touchStartX = e.touches[0].clientX;
+      if (stateRef.current.viewMode === 'face-to-face') {
+        stateRef.current.viewMode = 'corridor';
+        setIsFaceToFace(false);
+      }
       stateRef.current.targetProgress += deltaX * 0.0016;
     };
 
@@ -700,18 +668,19 @@ export default function Gallery3D({
     container.addEventListener('touchmove', onTouchMove, { passive: true });
 
     if (initialCollectionId) {
-      const found = exhibitionItems.find(
+      const foundIdx = exhibitionItems.findIndex(
         (it) => it.artwork.collectionId === initialCollectionId
       );
-      if (found) {
-        stateRef.current.progress = found.t;
-        stateRef.current.targetProgress = found.t;
+      if (foundIdx !== -1) {
+        setFaceToFaceTarget(foundIdx);
       }
     }
 
-    // ANIMATION LOOP (SOLID 60-120 FPS)
+    // ANIMATION LOOP (SOLID 60-120 FPS, SMOOTH CORRIDOR & FACE-TO-FACE MODES)
     let animationFrameId: number;
     let lastRaycastTime = 0;
+    const currentCamPos = new THREE.Vector3();
+    const currentLookTarget = new THREE.Vector3();
 
     const animate = (timestamp: number) => {
       animationFrameId = requestAnimationFrame(animate);
@@ -721,16 +690,18 @@ export default function Gallery3D({
       const keyStep = isShift ? 0.003 : 0.0016;
 
       if (keys.has('KeyW') || keys.has('ArrowUp')) {
+        if (stateRef.current.viewMode === 'face-to-face') {
+          stateRef.current.viewMode = 'corridor';
+          setIsFaceToFace(false);
+        }
         stateRef.current.targetProgress += keyStep;
       }
       if (keys.has('KeyS') || keys.has('ArrowDown')) {
+        if (stateRef.current.viewMode === 'face-to-face') {
+          stateRef.current.viewMode = 'corridor';
+          setIsFaceToFace(false);
+        }
         stateRef.current.targetProgress -= keyStep;
-      }
-      if (keys.has('KeyA') || keys.has('ArrowLeft')) {
-        stateRef.current.targetProgress -= keyStep * 0.8;
-      }
-      if (keys.has('KeyD') || keys.has('ArrowRight')) {
-        stateRef.current.targetProgress += keyStep * 0.8;
       }
 
       stateRef.current.progress +=
@@ -739,21 +710,17 @@ export default function Gallery3D({
       const p = ((stateRef.current.progress % 1) + 1) % 1;
       setCurrentProgressPct(p);
 
-      // Check if visitor is currently at the Grand Main Gate threshold
       const atGate = p < 0.04 || p > 0.965;
-      setIsAtGate(atGate);
+      setIsAtGate(atGate && stateRef.current.viewMode !== 'face-to-face');
 
-      // CAMERA POSITION (Centerline eye-height)
+      // CORRIDOR WALKING CAMERA POSITION & TARGET
       const eyeHeight = 2.0;
-      const camPos = tunnelSpline.getPointAt(p);
-      camPos.y = eyeHeight;
-      camera.position.copy(camPos);
+      const corridorCamPos = tunnelSpline.getPointAt(p);
+      corridorCamPos.y = eyeHeight;
 
-      // CAMERA FORWARD LOOK TANGENT
       const forwardTangent = tunnelSpline.getTangentAt(p);
       const lookOffsetDist = 12.0;
-
-      const lookTarget = camPos
+      const corridorLookTarget = corridorCamPos
         .clone()
         .add(forwardTangent.clone().multiplyScalar(lookOffsetDist));
 
@@ -761,12 +728,23 @@ export default function Gallery3D({
         .crossVectors(forwardTangent, upVector)
         .normalize();
 
-      lookTarget.add(
+      corridorLookTarget.add(
         corridorNormal.clone().multiplyScalar(-stateRef.current.mouseNormX * 3.2)
       );
-      lookTarget.y += stateRef.current.mouseNormY * 0.8;
+      corridorLookTarget.y += stateRef.current.mouseNormY * 0.8;
 
-      camera.lookAt(lookTarget);
+      // BLEND FACTOR FOR FACE-TO-FACE INSPECTION
+      const targetBlend = stateRef.current.viewMode === 'face-to-face' ? 1.0 : 0.0;
+      stateRef.current.blendFactor +=
+        (targetBlend - stateRef.current.blendFactor) * 0.10;
+      const b = stateRef.current.blendFactor;
+
+      // Interpolate smoothly between corridor walk and face-to-face view!
+      currentCamPos.lerpVectors(corridorCamPos, stateRef.current.faceCamPos, b);
+      currentLookTarget.lerpVectors(corridorLookTarget, stateRef.current.faceLookTarget, b);
+
+      camera.position.copy(currentCamPos);
+      camera.lookAt(currentLookTarget);
 
       // Throttled raycasting
       if (timestamp - lastRaycastTime > 90) {
@@ -787,25 +765,31 @@ export default function Gallery3D({
         }
       }
 
-      // Determine active artwork
-      let closestItem = exhibitionItems[0];
-      let minDiff = 1;
+      // Track closest artwork when in corridor mode
+      if (stateRef.current.viewMode === 'corridor') {
+        let closestItem = exhibitionItems[0];
+        let closestIdx = 0;
+        let minDiff = 1;
 
-      exhibitionItems.forEach((item) => {
-        let diff = Math.abs(item.t - p);
-        if (diff > 0.5) diff = 1 - diff;
-        if (diff < minDiff) {
-          minDiff = diff;
-          closestItem = item;
+        exhibitionItems.forEach((item, idx) => {
+          let diff = Math.abs(item.t - p);
+          if (diff > 0.5) diff = 1 - diff;
+          if (diff < minDiff) {
+            minDiff = diff;
+            closestItem = item;
+            closestIdx = idx;
+          }
+        });
+
+        if (closestItem && closestItem.artwork.id !== activeArtwork?.id) {
+          setActiveArtwork(closestItem.artwork);
+          stateRef.current.artworkIndex = closestIdx;
+          setCurrentIndex(closestIdx);
+          const col = ART_COLLECTIONS.find(
+            (c) => c.id === closestItem.artwork.collectionId
+          );
+          if (col) setActiveCollection(col);
         }
-      });
-
-      if (closestItem && closestItem.artwork.id !== activeArtwork?.id) {
-        setActiveArtwork(closestItem.artwork);
-        const col = ART_COLLECTIONS.find(
-          (c) => c.id === closestItem.artwork.collectionId
-        );
-        if (col) setActiveCollection(col);
       }
 
       renderer.render(scene, camera);
@@ -857,22 +841,24 @@ export default function Gallery3D({
       carpetGeo.dispose();
       carpetMat.dispose();
     };
-  }, [exhibitionItems, onSelectArtwork, initialCollectionId, activeArtwork?.id]);
+  }, [exhibitionItems, onSelectArtwork, initialCollectionId, activeArtwork?.id, handleNextFaceToFace, handlePrevFaceToFace, setFaceToFaceTarget]);
 
   const jumpToCollection = (colId: string) => {
-    const item = exhibitionItems.find((it) => it.artwork.collectionId === colId);
-    if (item) {
-      stateRef.current.targetProgress = item.t;
+    const itemIdx = exhibitionItems.findIndex((it) => it.artwork.collectionId === colId);
+    if (itemIdx !== -1) {
+      setFaceToFaceTarget(itemIdx);
     }
   };
 
-  const stepWalk = (direction: 'forward' | 'backward') => {
-    stateRef.current.targetProgress += direction === 'forward' ? 0.05 : -0.05;
+  const walkThroughGate = () => {
+    stateRef.current.viewMode = 'corridor';
+    setIsFaceToFace(false);
+    stateRef.current.targetProgress = 0.06;
   };
 
-  const walkThroughGate = () => {
-    // Glide forward through the decorated entrance gate into the first collection!
-    stateRef.current.targetProgress = 0.06;
+  const resumeCorridorWalk = () => {
+    stateRef.current.viewMode = 'corridor';
+    setIsFaceToFace(false);
   };
 
   return (
@@ -880,12 +866,13 @@ export default function Gallery3D({
       {/* 3D WebGL Canvas */}
       <div ref={mountRef} className='w-full h-full' />
 
-      {/* TOP CONTROLS: Collection Tabs */}
+      {/* TOP CONTROLS: Collection Tabs & Return to Gate */}
       <div className='absolute top-4 left-0 right-0 z-20 flex items-center justify-between px-6 pointer-events-none'>
         <div className='pointer-events-auto flex items-center gap-2 overflow-x-auto py-1 max-w-[70vw] no-scrollbar'>
-          {/* Quick Gate Return Button */}
           <button
             onClick={() => {
+              stateRef.current.viewMode = 'corridor';
+              setIsFaceToFace(false);
               stateRef.current.targetProgress = 0.992;
             }}
             className='px-3.5 py-1.5 text-xs uppercase tracking-wider font-bold rounded-full bg-amber-500 hover:bg-amber-600 text-white shadow-md transition-all flex items-center gap-1.5 whitespace-nowrap'
@@ -931,21 +918,24 @@ export default function Gallery3D({
         </div>
       </div>
 
-      {/* QUICK STEP BUTTONS ON SIDES */}
+      {/* 🎯 "<" AND ">" BUTTONS: FACE-TO-FACE ARTWORK INSPECTION TOUR */}
+      {/* Clicking "<" or ">" points the camera directly perpendicular to the artwork so you look at it FACE TO FACE */}
       <button
-        onClick={() => stepWalk('backward')}
-        className='absolute left-4 top-1/2 -translate-y-1/2 z-20 p-3 rounded-full bg-white/85 hover:bg-white text-zinc-800 shadow-md border border-zinc-200/80 backdrop-blur-md transition-all hover:scale-110 active:scale-95'
-        title='Walk Backward'
+        onClick={handlePrevFaceToFace}
+        className='absolute left-4 top-1/2 -translate-y-1/2 z-30 p-3.5 rounded-full bg-white/90 hover:bg-white text-zinc-900 shadow-xl border border-zinc-300 backdrop-blur-md transition-all hover:scale-110 active:scale-95 group'
+        title='Previous Artwork (Face-to-Face View)'
+        aria-label='Previous Artwork Face-to-Face'
       >
-        <ChevronLeft size={22} />
+        <ChevronLeft size={24} className='group-hover:-translate-x-0.5 transition-transform' />
       </button>
 
       <button
-        onClick={() => stepWalk('forward')}
-        className='absolute right-4 top-1/2 -translate-y-1/2 z-20 p-3 rounded-full bg-white/85 hover:bg-white text-zinc-800 shadow-md border border-zinc-200/80 backdrop-blur-md transition-all hover:scale-110 active:scale-95'
-        title='Walk Forward'
+        onClick={handleNextFaceToFace}
+        className='absolute right-4 top-1/2 -translate-y-1/2 z-30 p-3.5 rounded-full bg-white/90 hover:bg-white text-zinc-900 shadow-xl border border-zinc-300 backdrop-blur-md transition-all hover:scale-110 active:scale-95 group'
+        title='Next Artwork (Face-to-Face View)'
+        aria-label='Next Artwork Face-to-Face'
       >
-        <ChevronRight size={22} />
+        <ChevronRight size={24} className='group-hover:translate-x-0.5 transition-transform' />
       </button>
 
       {/* HOVER TOOLTIP */}
@@ -953,18 +943,18 @@ export default function Gallery3D({
         <div className='pointer-events-none absolute bottom-32 left-1/2 -translate-x-1/2 z-30 bg-zinc-950/90 text-white px-4 py-2 rounded-full backdrop-blur-md shadow-2xl text-xs flex items-center gap-2 border border-white/10 animate-fade-in'>
           <Eye size={14} className='text-amber-400' />
           <span>
-            Click to inspect:{' '}
+            Click to view face-to-face:{' '}
             <strong className='font-semibold'>{hoveredPrint.title}</strong>
           </span>
           <span className='text-zinc-400'>• From ${hoveredPrint.basePrice}</span>
         </div>
       )}
 
-      {/* BOTTOM CENTER: DYNAMIC GATE ENTRANCE OR WALKING PAST PLAQUE */}
+      {/* BOTTOM CENTER: INTUITIVE STATUS & FACE-TO-FACE BADGE */}
       <div className='absolute bottom-6 left-0 right-0 z-20 flex flex-col items-center justify-center pointer-events-none text-center px-4'>
         {isAtGate ? (
-          /* SPECIAL GRAND ENTRANCE GATE CARD */
-          <div className='pointer-events-auto flex flex-col items-center bg-zinc-950/90 text-white backdrop-blur-md px-8 py-4 rounded-2xl shadow-2xl border border-amber-500/40 transition-all hover:border-amber-500'>
+          /* ENTRANCE GATE CARD */
+          <div className='pointer-events-auto flex flex-col items-center bg-zinc-950/92 text-white backdrop-blur-md px-8 py-4 rounded-2xl shadow-2xl border border-amber-500/40 transition-all hover:border-amber-500'>
             <div className='text-[10px] uppercase tracking-[0.25em] text-amber-400 font-bold mb-1 flex items-center gap-1.5'>
               <Sparkles size={12} className='text-amber-400' />
               <span>Grand Exhibition Portal</span>
@@ -975,7 +965,7 @@ export default function Gallery3D({
             </h2>
 
             <p className='text-xs text-zinc-300 font-medium mt-1 max-w-md'>
-              You are standing at the ceremonial entrance. Step through the gate to explore original archival prints by Mayowa Alabi.
+              You are standing at the ceremonial entrance. Use the <strong>&lt;</strong> and <strong>&gt;</strong> buttons to inspect paintings face-to-face, or step through the gate.
             </p>
 
             <button
@@ -987,24 +977,33 @@ export default function Gallery3D({
             </button>
           </div>
         ) : (
-          /* STANDARD "YOU ARE WALKING PAST" PLAQUE MATCHING VIDEO */
+          /* ACTIVE ARTWORK PLAQUE WITH FACE-TO-FACE INDICATOR */
           <div className='pointer-events-auto flex flex-col items-center bg-white/92 backdrop-blur-md px-8 py-3.5 rounded-2xl shadow-xl border border-zinc-200/90 transition-all hover:shadow-2xl'>
-            <div className='text-[10px] uppercase tracking-[0.25em] text-zinc-500 font-bold mb-0.5 flex items-center gap-1.5'>
-              <Sparkles size={11} className='text-amber-500' />
-              <span>You Are Walking Past</span>
+            <div className='flex items-center gap-2 mb-0.5'>
+              {isFaceToFace ? (
+                <span className='text-[10px] uppercase tracking-[0.2em] text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full font-bold flex items-center gap-1 border border-emerald-200'>
+                  <UserCheck size={11} />
+                  <span>Face-to-Face View ({exhibitionItems[currentIndex]?.wallSide?.toUpperCase()} WALL)</span>
+                </span>
+              ) : (
+                <span className='text-[10px] uppercase tracking-[0.2em] text-zinc-500 font-bold flex items-center gap-1'>
+                  <Sparkles size={11} className='text-amber-500' />
+                  <span>You Are Walking Past</span>
+                </span>
+              )}
             </div>
 
             <h2 className='text-xl sm:text-2xl font-black uppercase tracking-tight text-zinc-900'>
-              {activeCollection?.title || 'Exhibition Tunnel'}
+              {activeArtwork?.title || activeCollection?.title || 'Exhibition Corridor'}
             </h2>
 
             {activeArtwork && (
               <p className='text-xs text-zinc-600 font-medium mt-0.5'>
-                Artwork:{' '}
+                Series:{' '}
                 <span className='text-zinc-900 font-semibold'>
-                  {activeArtwork.title}
+                  {activeArtwork.collectionTitle}
                 </span>{' '}
-                • By {activeArtwork.artist}
+                • {activeArtwork.artist} • Print {currentIndex + 1} of {exhibitionItems.length}
               </p>
             )}
 
@@ -1013,26 +1012,35 @@ export default function Gallery3D({
                 onClick={() => activeArtwork && onSelectArtwork(activeArtwork)}
                 className='px-4 py-1.5 bg-zinc-900 text-white hover:bg-black text-xs font-semibold uppercase tracking-wider rounded-full shadow-sm hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5'
               >
-                <span>View Print & Buy</span>
+                <span>Inquire & Buy Print</span>
                 <span className='text-amber-400'>
                   ${activeArtwork?.basePrice || 50}
                 </span>
               </button>
 
-              {onEnterCollection && activeCollection && (
+              {isFaceToFace ? (
                 <button
-                  onClick={() => onEnterCollection(activeCollection.id)}
+                  onClick={resumeCorridorWalk}
                   className='text-xs font-semibold text-zinc-700 hover:text-black tracking-wide underline underline-offset-4'
                 >
-                  Enter Collection ({activeCollection.count} prints) →
+                  Resume Corridor Walk →
                 </button>
+              ) : (
+                onEnterCollection && activeCollection && (
+                  <button
+                    onClick={() => onEnterCollection(activeCollection.id)}
+                    className='text-xs font-semibold text-zinc-700 hover:text-black tracking-wide underline underline-offset-4'
+                  >
+                    Enter Collection ({activeCollection.count} prints) →
+                  </button>
+                )
               )}
             </div>
           </div>
         )}
       </div>
 
-      {/* BOTTOM RIGHT: SMOOTH INSTRUCTIONS & RADAR */}
+      {/* BOTTOM RIGHT: INSTRUCTIONS & RADAR */}
       <div className='absolute bottom-6 right-6 z-20 hidden sm:flex items-center gap-3 pointer-events-none text-zinc-600 bg-white/85 backdrop-blur-md px-4 py-2.5 rounded-2xl border border-zinc-200/80 shadow-md'>
         <div className='relative w-7 h-7 rounded-full border-2 border-zinc-300 flex items-center justify-center'>
           <div
@@ -1048,11 +1056,10 @@ export default function Gallery3D({
 
         <div className='text-left'>
           <div className='text-[10px] font-bold uppercase tracking-wider text-zinc-800 flex items-center gap-1.5'>
-            <MousePointer size={11} className='text-zinc-600' />
-            <span>Scroll or Drag to Walk</span>
+            <span>Click &lt; or &gt; for Face-to-Face View</span>
           </div>
           <div className='text-[9px] text-zinc-500'>
-            {isAtGate ? 'Step through gate into gallery' : 'Click any painting on left or right wall'}
+            Scroll or drag mouse to glide through hall
           </div>
         </div>
       </div>
