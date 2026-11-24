@@ -1,99 +1,172 @@
-import { useState } from 'react';
-import { motion } from 'framer-motion';
+import React, { useState } from 'react';
+import { Mail, MapPin, Phone, ShieldCheck, Send, CheckCircle2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { Send } from 'lucide-react';
 
 export default function Contact() {
-  const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
-  const [message, setMessage] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [formData, setFormData] = useState({
+    name: '',
+    email: '',
+    inquiryType: 'Acquisitions & Prints',
+    message: '',
+  });
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name || !email || !message) {
-        toast.error('Please fill in all fields.');
-        return;
-    }
-    setIsSubmitting(true);
-    toast.loading('Sending your message...');
-
-    // Simulate API call
-    setTimeout(() => {
-        setIsSubmitting(false);
-        toast.dismiss();
-        toast.success('Message sent successfully! We will get back to you soon.');
-        setName('');
-        setEmail('');
-        setMessage('');
-    }, 2000);
+    setSubmitted(true);
+    toast.success('Your message has been dispatched to Shutabug Studio.');
   };
 
   return (
-    <div className="bg-gray-50 py-16 sm:py-24">
-      <div className="container mx-auto px-4 sm:px-6 lg:px-8">
-        <motion.div 
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5 }}
-          className="text-center mb-12"
-        >
-          <h1 className="text-4xl font-bold">Contact Us</h1>
-          <p className="text-lg text-gray-600 mt-2">We\'d love to hear from you! Send us a message for inquiries or feedback.</p>
-        </motion.div>
+    <div className='bg-[#f8f8fa] min-h-screen py-16 px-4 sm:px-6 lg:px-8 text-zinc-900'>
+      <div className='max-w-4xl mx-auto space-y-12'>
+        <div className='border-b border-zinc-200 pb-8'>
+          <span className='text-xs font-bold uppercase tracking-[0.25em] text-zinc-500 mb-2 block'>
+            Studio & Collector Services
+          </span>
+          <h1 className='text-3xl sm:text-4xl font-black uppercase tracking-tight text-zinc-950'>
+            Inquire & Connect
+          </h1>
+          <p className='text-xs sm:text-sm text-zinc-600 max-w-xl mt-2'>
+            Whether you are curating a private collection, ordering bespoke archival prints for an interior project, or inquiring about gallery representation, our team is at your service.
+          </p>
+        </div>
 
-        <motion.div 
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ duration: 0.7, delay: 0.2 }}
-            className="max-w-2xl mx-auto bg-white p-8 sm:p-12 rounded-xl shadow-lg"
-        >
-          <form onSubmit={handleSubmit} className="space-y-6">
-            <div>
-              <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-1">Full Name</label>
-              <input
-                type="text"
-                id="name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500"
-                placeholder="John Doe"
-              />
+        <div className='grid grid-cols-1 md:grid-cols-12 gap-10'>
+          {/* CONTACT INFO COLUMN */}
+          <div className='md:col-span-5 space-y-6'>
+            <div className='p-6 bg-white rounded-2xl border border-zinc-200/80 shadow-xs space-y-4'>
+              <h3 className='text-xs font-bold uppercase tracking-widest text-zinc-900'>
+                Studio Locations
+              </h3>
+
+              <div className='flex items-start gap-3 text-xs text-zinc-600'>
+                <MapPin size={16} className='text-zinc-400 shrink-0 mt-0.5' />
+                <div>
+                  <strong className='text-zinc-900'>Main Studio:</strong>
+                  <div>Victoria Island, Lagos, Nigeria</div>
+                </div>
+              </div>
+
+              <div className='flex items-start gap-3 text-xs text-zinc-600'>
+                <Mail size={16} className='text-zinc-400 shrink-0 mt-0.5' />
+                <div>
+                  <strong className='text-zinc-900'>Inquiries:</strong>
+                  <div>studio@shutabug.com</div>
+                </div>
+              </div>
+
+              <div className='flex items-start gap-3 text-xs text-zinc-600'>
+                <ShieldCheck size={16} className='text-zinc-400 shrink-0 mt-0.5' />
+                <div>
+                  <strong className='text-zinc-900'>Collector Care:</strong>
+                  <div>Mon - Sat, 9:00 AM - 6:00 PM WAT</div>
+                </div>
+              </div>
             </div>
-            <div>
-              <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">Email Address</label>
-              <input
-                type="email"
-                id="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500"
-                placeholder="you@example.com"
-              />
+
+            <div className='p-6 bg-zinc-900 text-white rounded-2xl space-y-2'>
+              <h4 className='text-xs font-bold uppercase tracking-wider text-amber-400'>
+                Worldwide Dispatch
+              </h4>
+              <p className='text-xs text-zinc-300 leading-relaxed'>
+                We ship to over 140 countries via DHL Express. Unframed prints are delivered in 3-5 business days; custom framed orders ship in 7-10 business days.
+              </p>
             </div>
-            <div>
-              <label htmlFor="message" className="block text-sm font-medium text-gray-700 mb-1">Message</label>
-              <textarea
-                id="message"
-                rows={5}
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500"
-                placeholder="Your message..."
-              ></textarea>
-            </div>
-            <div>
-              <button
-                type="submit"
-                disabled={isSubmitting}
-                className="w-full flex items-center justify-center bg-amber-600 text-white font-bold py-3 px-6 rounded-lg hover:bg-amber-700 transition-colors disabled:bg-gray-400"
-              >
-                <Send size={20} className="mr-2" />
-                {isSubmitting ? 'Sending...' : 'Send Message'}
-              </button>
-            </div>
-          </form>
-        </motion.div>
+          </div>
+
+          {/* CONTACT FORM */}
+          <div className='md:col-span-7 bg-white p-8 rounded-3xl border border-zinc-200/80 shadow-xs'>
+            {submitted ? (
+              <div className='py-12 text-center flex flex-col items-center space-y-4'>
+                <div className='w-14 h-14 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center'>
+                  <CheckCircle2 size={32} />
+                </div>
+                <h3 className='text-xl font-black text-zinc-900'>
+                  Message Dispatched
+                </h3>
+                <p className='text-xs text-zinc-500 max-w-sm'>
+                  Thank you for reaching out. A studio curator will reply to <strong>{formData.email}</strong> within 24 hours.
+                </p>
+                <button
+                  onClick={() => setSubmitted(false)}
+                  className='text-xs font-bold uppercase tracking-wider text-zinc-900 underline underline-offset-4'
+                >
+                  Send another inquiry
+                </button>
+              </div>
+            ) : (
+              <form onSubmit={handleSubmit} className='space-y-4'>
+                <div>
+                  <label className='block text-xs font-bold uppercase tracking-wider text-zinc-700 mb-1.5'>
+                    Your Name
+                  </label>
+                  <input
+                    type='text'
+                    required
+                    value={formData.name}
+                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    placeholder='Jane Doe'
+                    className='w-full px-3.5 py-2.5 text-xs bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-zinc-900'
+                  />
+                </div>
+
+                <div>
+                  <label className='block text-xs font-bold uppercase tracking-wider text-zinc-700 mb-1.5'>
+                    Email Address
+                  </label>
+                  <input
+                    type='email'
+                    required
+                    value={formData.email}
+                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                    placeholder='jane@collector.art'
+                    className='w-full px-3.5 py-2.5 text-xs bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-zinc-900'
+                  />
+                </div>
+
+                <div>
+                  <label className='block text-xs font-bold uppercase tracking-wider text-zinc-700 mb-1.5'>
+                    Inquiry Nature
+                  </label>
+                  <select
+                    value={formData.inquiryType}
+                    onChange={(e) => setFormData({ ...formData, inquiryType: e.target.value })}
+                    className='w-full px-3.5 py-2.5 text-xs bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-zinc-900'
+                  >
+                    <option>Print Sizing & Framing Guidance</option>
+                    <option>Special Edition / Signed Works</option>
+                    <option>Interior Architecture Sourcing</option>
+                    <option>Gallery & Institutional Representation</option>
+                    <option>Press & Media</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className='block text-xs font-bold uppercase tracking-wider text-zinc-700 mb-1.5'>
+                    Message
+                  </label>
+                  <textarea
+                    rows={4}
+                    required
+                    value={formData.message}
+                    onChange={(e) => setFormData({ ...formData, message: e.target.value })}
+                    placeholder='Tell us how we can assist your art collection...'
+                    className='w-full px-3.5 py-2.5 text-xs bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-zinc-900'
+                  />
+                </div>
+
+                <button
+                  type='submit'
+                  className='w-full py-3.5 bg-zinc-950 hover:bg-black text-white text-xs font-bold uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2 shadow-sm'
+                >
+                  <Send size={14} />
+                  <span>Send Studio Inquiry</span>
+                </button>
+              </form>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
