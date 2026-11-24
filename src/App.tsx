@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, useNavigate } from 'react-router-dom';
 import { Toaster } from 'sonner';
 import { CartProvider } from './context/CartContext';
+import { ArtworkProvider } from './context/ArtworkContext';
 import Header from './components/Header';
 import Footer from './components/Footer';
 import CartDrawer from './components/CartDrawer';
@@ -11,6 +12,7 @@ import Home from './pages/Home';
 import Products from './pages/Products';
 import About from './pages/About';
 import Contact from './pages/Contact';
+import Admin from './pages/Admin';
 import { ArtworkPrint } from './data/artworks';
 
 function AppContent() {
@@ -37,6 +39,7 @@ function AppContent() {
           <Route path='/products' element={<Products />} />
           <Route path='/about' element={<About />} />
           <Route path='/contact' element={<Contact />} />
+          <Route path='/admin' element={<Admin />} />
         </Routes>
       </main>
 
@@ -68,9 +71,11 @@ function AppContent() {
 export default function App() {
   return (
     <Router>
-      <CartProvider>
-        <AppContent />
-      </CartProvider>
+      <ArtworkProvider>
+        <CartProvider>
+          <AppContent />
+        </CartProvider>
+      </ArtworkProvider>
     </Router>
   );
 }

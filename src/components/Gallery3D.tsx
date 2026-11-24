@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
-import { ART_COLLECTIONS, ArtworkPrint, ALL_PRINTS } from '../data/artworks';
+import { ArtworkPrint } from '../data/artworks';
+import { useArtworks } from '../context/ArtworkContext';
 import {
   Volume2,
   VolumeX,
@@ -24,13 +25,20 @@ export default function Gallery3D({
   onEnterCollection,
   initialCollectionId,
 }: Gallery3DProps) {
+  const { exhibitionPrints, collections } = useArtworks();
   const mountRef = useRef<HTMLDivElement>(null);
   const [activeArtwork, setActiveArtwork] = useState<ArtworkPrint | null>(null);
-  const [activeCollection, setActiveCollection] = useState(ART_COLLECTIONS[0]);
+  const [activeCollection, setActiveCollection] = useState(collections[0]);
   const [isAudioEnabled, setIsAudioEnabled] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [hoveredPrint, setHoveredPrint] = useState<ArtworkPrint | null>(null);
   const [currentProgressPct, setCurrentProgressPct] = useState(0);
+
+  const onSelectRef = useRef(onSelectArtwork);
+  onSelectRef.current = onSelectArtwork;
+  const activeArtIdRef = useRef<string | null>(null);
+  const collectionsRef = useRef(collections);
+  collectionsRef.current = collections;
 
   // State reference - simple, stable, zero-garbage
   const stateRef = useRef({
@@ -56,10 +64,9 @@ export default function Gallery3D({
       t: number;
     }[] = [];
 
-    const prints = ALL_PRINTS.slice(0, 36);
-    const total = prints.length;
+    const total = exhibitionPrints.length || 1;
 
-    prints.forEach((p, idx) => {
+    exhibitionPrints.forEach((p, idx) => {
       list.push({
         artwork: p,
         collectionId: p.collectionId,
@@ -70,7 +77,7 @@ export default function Gallery3D({
     });
 
     return list;
-  }, []);
+  }, [exhibitionPrints]);
 
   // Web Audio Ambiance
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -272,6 +279,7 @@ export default function Gallery3D({
     // STATIC CLICK TARGET ARRAY (NO GC IN ANIMATE LOOP)
     const clickableMeshes: THREE.Mesh[] = [];
     const textureLoader = new THREE.TextureLoader();
+    textureLoader.setCrossOrigin('anonymous');
 
     // Reusable materials & geometries
     const frameGeo = new THREE.BoxGeometry(2.35, 3.15, 0.08);
@@ -282,7 +290,7 @@ export default function Gallery3D({
     const plaqueGeo = new THREE.PlaneGeometry(0.85, 0.42);
 
     // Canvas plaque generator
-    const createPlaqueTexture = (title: string, colTitle: string) => {
+    const createPlaqueTexture = (art: ArtworkPrint) => {
       const canvas = document.createElement('canvas');
       canvas.width = 512;
       canvas.height = 256;
@@ -296,20 +304,20 @@ export default function Gallery3D({
 
         ctx.fillStyle = '#18181b';
         ctx.font = 'bold 26px -apple-system, sans-serif';
-        ctx.fillText(title.slice(0, 24).toUpperCase(), 28, 64);
+        ctx.fillText(art.title.slice(0, 24).toUpperCase(), 28, 64);
 
         ctx.fillStyle = '#71717a';
         ctx.font = '20px -apple-system, sans-serif';
-        ctx.fillText('MAYOWA ALABI (SHUTABUG)', 28, 108);
+        ctx.fillText(art.artist.slice(0, 28).toUpperCase(), 28, 108);
 
         ctx.fillStyle = '#a1a1aa';
         ctx.font = '18px -apple-system, sans-serif';
-        ctx.fillText(`Series: ${colTitle}`, 28, 148);
-        ctx.fillText('Fine Art Archival Print • 2026', 28, 184);
+        ctx.fillText(`Series: ${art.collectionTitle.slice(0, 26)}`, 28, 148);
+        ctx.fillText(`${art.medium.slice(0, 26)} • ${art.year}`, 28, 184);
 
         ctx.fillStyle = '#18181b';
         ctx.font = 'bold 22px -apple-system, sans-serif';
-        ctx.fillText('From $50.00 • Inquire / Buy →', 28, 224);
+        ctx.fillText(`From $${Number(art.basePrice).toFixed(2)} • Inquire / Buy →`, 28, 224);
       }
       return new THREE.CanvasTexture(canvas);
     };
@@ -354,7 +362,7 @@ export default function Gallery3D({
 
       // Plaque beside painting
       const plaqueMat = new THREE.MeshBasicMaterial({
-        map: createPlaqueTexture(artwork.title, artwork.collectionTitle),
+        map: createPlaqueTexture(artwork),
       });
       const plaqueMesh = new THREE.Mesh(plaqueGeo, plaqueMat);
       plaqueMesh.position.set(1.15 + 0.85 / 2 + 0.15, -0.9, 0.01);
@@ -427,8 +435,9 @@ export default function Gallery3D({
     const onKeyDown = (e: KeyboardEvent) => {
       stateRef.current.keys.add(e.code);
       if (e.key === 'Enter' || e.key === 'Space') {
-        if (activeArtwork) {
-          onSelectArtwork(activeArtwork);
+        const current = exhibitionItems.find((it) => it.artwork.id === activeArtIdRef.current);
+        if (current) {
+          onSelectRef.current(current.artwork);
         }
       }
     };
@@ -452,7 +461,7 @@ export default function Gallery3D({
         const hit = hits[0].object;
         if (hit.userData?.artwork) {
           stateRef.current.targetProgress = hit.userData.t;
-          onSelectArtwork(hit.userData.artwork);
+          onSelectRef.current(hit.userData.artwork);
         }
       }
     };
@@ -579,9 +588,10 @@ export default function Gallery3D({
         }
       });
 
-      if (closestItem && closestItem.artwork.id !== activeArtwork?.id) {
+      if (closestItem && closestItem.artwork.id !== activeArtIdRef.current) {
+        activeArtIdRef.current = closestItem.artwork.id;
         setActiveArtwork(closestItem.artwork);
-        const col = ART_COLLECTIONS.find(
+        const col = collectionsRef.current.find(
           (c) => c.id === closestItem.artwork.collectionId
         );
         if (col) setActiveCollection(col);
@@ -631,7 +641,7 @@ export default function Gallery3D({
       artGeo.dispose();
       plaqueGeo.dispose();
     };
-  }, [exhibitionItems, onSelectArtwork, initialCollectionId, activeArtwork?.id]);
+  }, [exhibitionItems, initialCollectionId]);
 
   const jumpToCollection = (colId: string) => {
     const item = exhibitionItems.find((it) => it.artwork.collectionId === colId);
@@ -652,7 +662,7 @@ export default function Gallery3D({
       {/* TOP CONTROLS: Collection Tabs */}
       <div className='absolute top-4 left-0 right-0 z-20 flex items-center justify-between px-6 pointer-events-none'>
         <div className='pointer-events-auto flex items-center gap-2 overflow-x-auto py-1 max-w-[70vw] no-scrollbar'>
-          {ART_COLLECTIONS.slice(0, 8).map((col) => {
+          {collections.slice(0, 8).map((col) => {
             const isSelected = activeCollection?.id === col.id;
             return (
               <button

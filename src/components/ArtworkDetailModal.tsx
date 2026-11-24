@@ -21,9 +21,9 @@ import {
   PAPER_OPTIONS,
   SIZE_OPTIONS,
   FRAME_OPTIONS,
-  ART_COLLECTIONS,
 } from '../data/artworks';
 import { useCart } from '../context/CartContext';
+import { useArtworks } from '../context/ArtworkContext';
 import { toast } from 'sonner';
 
 interface ArtworkDetailModalProps {
@@ -38,6 +38,7 @@ export default function ArtworkDetailModal({
   onSelectAnotherArtwork,
 }: ArtworkDetailModalProps) {
   const { addItem, formatPrice } = useCart();
+  const { collections } = useArtworks();
 
   const [selectedPaper, setSelectedPaper] = useState(PAPER_OPTIONS[0]);
   const [selectedSize, setSelectedSize] = useState(SIZE_OPTIONS[0]);
@@ -60,7 +61,7 @@ export default function ArtworkDetailModal({
   const totalPriceUSD = unitPriceUSD * quantity;
 
   // Related artworks in the same collection
-  const parentCollection = ART_COLLECTIONS.find(
+  const parentCollection = collections.find(
     (c) => c.id === artwork.collectionId
   );
   const relatedPrints = (parentCollection?.prints || []).filter(

@@ -18,6 +18,7 @@ export default function Header({ onOpenSearch }: HeaderProps) {
     { href: '/products', label: 'All Prints' },
     { href: '/about', label: 'About Mayowa' },
     { href: '/contact', label: 'Collector Inquiries' },
+    { href: '/admin', label: 'Admin' },
   ];
 
   return (

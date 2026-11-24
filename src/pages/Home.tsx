@@ -2,8 +2,9 @@ import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import Gallery3D from '../components/Gallery3D';
 import ArtworkDetailModal from '../components/ArtworkDetailModal';
-import { ART_COLLECTIONS, ALL_PRINTS, ArtworkPrint } from '../data/artworks';
+import { ArtworkPrint } from '../data/artworks';
 import { useCart } from '../context/CartContext';
+import { useArtworks } from '../context/ArtworkContext';
 import {
   ArrowRight,
   Sparkles,
@@ -18,10 +19,11 @@ import {
 export default function Home() {
   const navigate = useNavigate();
   const { formatPrice } = useCart();
+  const { collections } = useArtworks();
   const [selectedArtwork, setSelectedArtwork] = useState<ArtworkPrint | null>(null);
 
   // Featured collections
-  const featuredCollections = ART_COLLECTIONS.slice(0, 4);
+  const featuredCollections = collections.slice(0, 4);
 
   const handleEnterCollection = (collectionId: string) => {
     navigate(`/products?collection=${collectionId}`);

@@ -1,7 +1,8 @@
 import React, { useState, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { ALL_PRINTS, ART_COLLECTIONS, ArtworkPrint } from '../data/artworks';
+import { ArtworkPrint } from '../data/artworks';
 import { useCart } from '../context/CartContext';
+import { useArtworks } from '../context/ArtworkContext';
 import ArtworkDetailModal from '../components/ArtworkDetailModal';
 import { Search, Filter, Eye, Sparkles } from 'lucide-react';
 
@@ -14,15 +15,16 @@ export default function Products() {
   const [sortBy, setSortBy] = useState<'featured' | 'price-asc' | 'price-desc' | 'title'>('featured');
 
   const { formatPrice } = useCart();
+  const { allPrints, collections } = useArtworks();
 
   // Active collection
   const activeCollection = collectionParam !== 'all'
-    ? ART_COLLECTIONS.find((c) => c.id === collectionParam)
+    ? collections.find((c) => c.id === collectionParam)
     : null;
 
   // Filtered & Sorted prints
   const displayedPrints = useMemo(() => {
-    let result = ALL_PRINTS;
+    let result = allPrints;
 
     if (collectionParam !== 'all') {
       result = result.filter((p) => p.collectionId === collectionParam);
@@ -46,7 +48,7 @@ export default function Products() {
     }
 
     return result;
-  }, [collectionParam, searchQuery, sortBy]);
+  }, [allPrints, collectionParam, searchQuery, sortBy]);
 
   return (
     <div className='bg-[#f8f8fa] min-h-screen py-10 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto'>
@@ -78,10 +80,10 @@ export default function Products() {
                 : 'bg-white hover:bg-zinc-100 text-zinc-700 border border-zinc-200'
             }`}
           >
-            All Prints ({ALL_PRINTS.length})
+            All Prints ({allPrints.length})
           </button>
 
-          {ART_COLLECTIONS.map((c) => (
+          {collections.map((c) => (
             <button
               key={c.id}
               onClick={() => setSearchParams({ collection: c.id })}

@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Search, X, ArrowRight, Sparkles } from 'lucide-react';
-import { ALL_PRINTS, ART_COLLECTIONS, ArtworkPrint } from '../data/artworks';
+import { ArtworkPrint } from '../data/artworks';
 import { useCart } from '../context/CartContext';
+import { useArtworks } from '../context/ArtworkContext';
 
 interface SearchCommandPaletteProps {
   isOpen: boolean;
@@ -18,6 +19,7 @@ export default function SearchCommandPalette({
 }: SearchCommandPaletteProps) {
   const [query, setQuery] = useState('');
   const { formatPrice } = useCart();
+  const { allPrints, collections } = useArtworks();
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -38,18 +40,18 @@ export default function SearchCommandPalette({
   if (!isOpen) return null;
 
   const filteredPrints = query.trim()
-    ? ALL_PRINTS.filter(
+    ? allPrints.filter(
         (p) =>
           p.title.toLowerCase().includes(query.toLowerCase()) ||
           p.collectionTitle.toLowerCase().includes(query.toLowerCase())
       ).slice(0, 8)
-    : ALL_PRINTS.slice(0, 6);
+    : allPrints.slice(0, 6);
 
   const filteredCollections = query.trim()
-    ? ART_COLLECTIONS.filter((c) =>
+    ? collections.filter((c) =>
         c.title.toLowerCase().includes(query.toLowerCase())
       ).slice(0, 4)
-    : ART_COLLECTIONS.slice(0, 4);
+    : collections.slice(0, 4);
 
   return (
     <div className='fixed inset-0 z-60 flex items-start justify-center pt-20 px-4 bg-black/60 backdrop-blur-xs'>
