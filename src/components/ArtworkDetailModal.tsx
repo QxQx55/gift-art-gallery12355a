@@ -609,3 +609,5 @@ export default function ArtworkDetailModal({
     </AnimatePresence>
   );
 }
+
+// Realistic Architectural Room Mockup mode with scaled perspective
