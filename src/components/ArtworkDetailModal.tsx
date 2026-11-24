@@ -611,3 +611,4 @@ export default function ArtworkDetailModal({
 }
 
 // Realistic Architectural Room Mockup mode with scaled perspective
+// Fine art paper, custom dimension, and wood frame selectors with live pricing
