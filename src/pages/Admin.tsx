@@ -49,6 +49,7 @@ export default function Admin() {
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [previewArtwork, setPreviewArtwork] = useState<ArtworkPrint | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   // Form State
   const [title, setTitle] = useState('');
@@ -95,19 +96,35 @@ export default function Admin() {
 
     const reader = new FileReader();
     reader.onload = () => {
-      const dataUrl = reader.result as string;
-      setImageUrl(dataUrl);
-      setImageError(false);
-
-      // Auto-detect exact aspect ratio
+      const rawDataUrl = reader.result as string;
       const img = new Image();
       img.onload = () => {
         if (img.width && img.height) {
           setRatio(Number((img.width / img.height).toFixed(4)));
         }
+
+        // Resize very large photos gracefully (>1800px) so upload & WebGL texture loading stay fast
+        const maxDim = 1800;
+        if (img.width > maxDim || img.height > maxDim) {
+          const scale = Math.min(maxDim / img.width, maxDim / img.height);
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.round(img.width * scale);
+          canvas.height = Math.round(img.height * scale);
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            setImageUrl(canvas.toDataURL('image/webp', 0.9));
+            setImageError(false);
+            toast.success(`Loaded & optimized "${file.name}"`);
+            return;
+          }
+        }
+
+        setImageUrl(rawDataUrl);
+        setImageError(false);
+        toast.success(`Loaded "${file.name}"`);
       };
-      img.src = dataUrl;
-      toast.success(`Loaded "${file.name}"`);
+      img.src = rawDataUrl;
     };
     reader.readAsDataURL(file);
   };
@@ -117,7 +134,7 @@ export default function Admin() {
     setImageError(false);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!title.trim()) {
@@ -158,40 +175,45 @@ export default function Admin() {
         .replace(/^-+|-+$/g, '');
     }
 
-    if (editingId) {
-      updateArtwork(editingId, {
-        title,
-        basePrice: numericPrice,
-        collectionId: colId,
-        collectionTitle: colTitle,
-        artist,
-        artistRole,
-        year,
-        medium,
-        src: imageUrl,
-        large: imageUrl,
-        ratio,
-        description,
-      });
-      toast.success(`Updated "${title}" in the exhibition!`);
-      resetForm();
-    } else {
-      addArtwork({
-        title,
-        basePrice: numericPrice,
-        collectionId: colId,
-        collectionTitle: colTitle,
-        artist,
-        artistRole,
-        year,
-        medium,
-        src: imageUrl,
-        large: imageUrl,
-        ratio,
-        description,
-      });
-      toast.success(`"${title}" added and live in the 3D Exhibition!`);
-      resetForm();
+    setIsSaving(true);
+    try {
+      if (editingId) {
+        await updateArtwork(editingId, {
+          title,
+          basePrice: numericPrice,
+          collectionId: colId,
+          collectionTitle: colTitle,
+          artist,
+          artistRole,
+          year,
+          medium,
+          src: imageUrl,
+          large: imageUrl,
+          ratio,
+          description,
+        });
+        toast.success(`Updated "${title}" in the exhibition!`);
+        resetForm();
+      } else {
+        await addArtwork({
+          title,
+          basePrice: numericPrice,
+          collectionId: colId,
+          collectionTitle: colTitle,
+          artist,
+          artistRole,
+          year,
+          medium,
+          src: imageUrl,
+          large: imageUrl,
+          ratio,
+          description,
+        });
+        toast.success(`"${title}" saved & live in the 3D Exhibition!`);
+        resetForm();
+      }
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -554,11 +576,16 @@ export default function Admin() {
           <div className='pt-2 flex items-center gap-3'>
             <button
               type='submit'
-              className='flex-1 py-3.5 bg-zinc-950 hover:bg-black text-white rounded-full text-xs font-bold uppercase tracking-widest shadow-lg hover:shadow-xl active:scale-[0.99] transition-all flex items-center justify-center gap-2'
+              disabled={isSaving}
+              className='flex-1 py-3.5 bg-zinc-950 hover:bg-black disabled:opacity-60 text-white rounded-full text-xs font-bold uppercase tracking-widest shadow-lg hover:shadow-xl active:scale-[0.99] transition-all flex items-center justify-center gap-2'
             >
               {editingId ? <Check size={16} /> : <Plus size={16} />}
               <span>
-                {editingId ? 'Save Artwork Changes' : 'Publish Artwork to 3D Exhibition'}
+                {isSaving
+                  ? 'Saving Artwork...'
+                  : editingId
+                  ? 'Save Artwork Changes'
+                  : 'Publish Artwork to 3D Exhibition'}
               </span>
             </button>
           </div>
@@ -688,6 +715,14 @@ export default function Admin() {
                     </span>
 
                     <div className='flex items-center gap-1.5'>
+                      <Link
+                        to={`/?artwork=${encodeURIComponent(art.id)}`}
+                        className='px-2.5 py-1.5 rounded-lg bg-zinc-900 hover:bg-black text-white text-[10px] font-bold uppercase tracking-wider flex items-center gap-1 transition-colors'
+                        title='Walk to this artwork in 3D Exhibition'
+                      >
+                        <Compass size={12} className='text-amber-400' />
+                        <span>3D</span>
+                      </Link>
                       <button
                         onClick={() => setPreviewArtwork(art)}
                         className='p-2 rounded-lg bg-white hover:bg-zinc-100 text-zinc-700 border border-zinc-200 transition-colors'

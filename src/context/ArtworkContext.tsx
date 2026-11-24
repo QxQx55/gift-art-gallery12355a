@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
 import {
   ALL_PRINTS,
   ART_COLLECTIONS,
@@ -7,6 +7,7 @@ import {
 } from '../data/artworks';
 
 const STORAGE_KEY = 'shutabug_custom_artworks';
+const API_URL = '/api/artworks';
 
 export interface NewArtworkInput {
   title: string;
@@ -28,9 +29,11 @@ interface ArtworkContextType {
   exhibitionPrints: ArtworkPrint[];
   collections: ArtCollection[];
   customPrints: ArtworkPrint[];
-  addArtwork: (input: NewArtworkInput) => ArtworkPrint;
-  updateArtwork: (id: string, updates: Partial<NewArtworkInput>) => void;
-  deleteArtwork: (id: string) => void;
+  isLoading: boolean;
+  addArtwork: (input: NewArtworkInput) => Promise<ArtworkPrint>;
+  updateArtwork: (id: string, updates: Partial<NewArtworkInput>) => Promise<void>;
+  deleteArtwork: (id: string) => Promise<void>;
+  refreshArtworks: () => Promise<void>;
   isCustomArtwork: (id: string) => boolean;
 }
 
@@ -44,6 +47,14 @@ function slugify(text: string): string {
     .replace(/^-+|-+$/g, '') || 'artwork';
 }
 
+function saveToLocalStorage(items: ArtworkPrint[]) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+  } catch {
+    // Ignore storage quota errors when using large images (server /api/artworks persists them)
+  }
+}
+
 export function ArtworkProvider({ children }: { children: React.ReactNode }) {
   const [customPrints, setCustomPrints] = useState<ArtworkPrint[]>(() => {
     try {
@@ -53,30 +64,51 @@ export function ArtworkProvider({ children }: { children: React.ReactNode }) {
       return [];
     }
   });
+  const [isLoading, setIsLoading] = useState(true);
+
+  const refreshArtworks = useCallback(async () => {
+    try {
+      const res = await fetch(API_URL, { headers: { Accept: 'application/json' } });
+      if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
+        const serverItems = (await res.json()) as ArtworkPrint[];
+        if (Array.isArray(serverItems)) {
+          if (serverItems.length > 0) {
+            setCustomPrints(serverItems);
+            saveToLocalStorage(serverItems);
+          } else {
+            setCustomPrints((localPrev) => (localPrev.length > 0 ? localPrev : []));
+          }
+        }
+      }
+    } catch {
+      // Fallback gracefully to localStorage on static hosting
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(customPrints));
-    } catch {
-      // Ignore quota errors
-    }
+    refreshArtworks();
+  }, [refreshArtworks]);
+
+  useEffect(() => {
+    saveToLocalStorage(customPrints);
   }, [customPrints]);
 
   const allPrints = useMemo(() => {
     return [...customPrints, ...ALL_PRINTS];
   }, [customPrints]);
 
-  // All custom artworks are guaranteed to appear at the front of the 3D Exhibition
+  // All custom artworks appear at the front of the 3D Exhibition
   const exhibitionPrints = useMemo(() => {
     const minCount = Math.max(36, customPrints.length + 24);
     return allPrints.slice(0, minCount);
   }, [allPrints, customPrints.length]);
 
-  // Merge custom artworks into existing collections or create new collections dynamically
+  // Merge custom artworks into collections and prioritize collections with custom additions
   const collections = useMemo(() => {
     const map = new Map<string, ArtCollection>();
 
-    // Clone base collections
     ART_COLLECTIONS.forEach((col) => {
       map.set(col.id, {
         ...col,
@@ -84,8 +116,13 @@ export function ArtworkProvider({ children }: { children: React.ReactNode }) {
       });
     });
 
-    // Prepend custom prints to their target collection (or create a new collection)
-    // Iterate in reverse so newest ends up at index 0
+    const activeCustomColOrder: string[] = [];
+    customPrints.forEach((p) => {
+      if (!activeCustomColOrder.includes(p.collectionId)) {
+        activeCustomColOrder.push(p.collectionId);
+      }
+    });
+
     [...customPrints].reverse().forEach((print) => {
       const existing = map.get(print.collectionId);
       if (existing) {
@@ -96,36 +133,37 @@ export function ArtworkProvider({ children }: { children: React.ReactNode }) {
           id: print.collectionId,
           title: print.collectionTitle,
           count: 1,
-          description: `Curated series "${print.collectionTitle}" featuring original archival works added via the Gallery Admin Studio.`,
+          description: `Curated series "${print.collectionTitle}" featuring original archival works added via the Exhibition Admin.`,
           prints: [print],
         });
       }
     });
 
-    // If any new custom collections were created, put them first so they appear in top nav
-    const customColIds = new Set(
-      customPrints
-        .map((p) => p.collectionId)
-        .filter((id) => !ART_COLLECTIONS.some((c) => c.id === id))
-    );
-
     const ordered: ArtCollection[] = [];
-    customColIds.forEach((id) => {
+    const pushed = new Set<string>();
+
+    activeCustomColOrder.forEach((id) => {
       const col = map.get(id);
-      if (col) ordered.push(col);
+      if (col && !pushed.has(id)) {
+        ordered.push(col);
+        pushed.add(id);
+      }
     });
+
     ART_COLLECTIONS.forEach((c) => {
-      const col = map.get(c.id);
-      if (col) ordered.push(col);
+      if (!pushed.has(c.id)) {
+        const col = map.get(c.id);
+        if (col) ordered.push(col);
+      }
     });
 
     return ordered;
   }, [customPrints]);
 
-  const addArtwork = (input: NewArtworkInput): ArtworkPrint => {
+  const addArtwork = async (input: NewArtworkInput): Promise<ArtworkPrint> => {
     const slug = slugify(input.title);
     const colId = input.collectionId.trim() || slugify(input.collectionTitle);
-    const newPrint: ArtworkPrint = {
+    const optimisticPrint: ArtworkPrint = {
       id: `custom-${slug}-${Date.now()}`,
       slug,
       collectionId: colId,
@@ -142,11 +180,29 @@ export function ArtworkProvider({ children }: { children: React.ReactNode }) {
       description: input.description.trim(),
     };
 
-    setCustomPrints((prev) => [newPrint, ...prev]);
-    return newPrint;
+    setCustomPrints((prev) => [optimisticPrint, ...prev]);
+
+    try {
+      const res = await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(optimisticPrint),
+      });
+      if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
+        const saved = (await res.json()) as ArtworkPrint;
+        setCustomPrints((prev) =>
+          prev.map((p) => (p.id === optimisticPrint.id ? saved : p))
+        );
+        return saved;
+      }
+    } catch {
+      // Static build fallback
+    }
+
+    return optimisticPrint;
   };
 
-  const updateArtwork = (id: string, updates: Partial<NewArtworkInput>) => {
+  const updateArtwork = async (id: string, updates: Partial<NewArtworkInput>) => {
     setCustomPrints((prev) =>
       prev.map((p) => {
         if (p.id !== id) return p;
@@ -162,10 +218,31 @@ export function ArtworkProvider({ children }: { children: React.ReactNode }) {
         };
       })
     );
+
+    try {
+      const res = await fetch(`${API_URL}/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates),
+      });
+      if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
+        const saved = (await res.json()) as ArtworkPrint;
+        setCustomPrints((prev) => prev.map((p) => (p.id === id ? saved : p)));
+      }
+    } catch {
+      // Static build fallback
+    }
   };
 
-  const deleteArtwork = (id: string) => {
+  const deleteArtwork = async (id: string) => {
     setCustomPrints((prev) => prev.filter((p) => p.id !== id));
+    try {
+      await fetch(`${API_URL}/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+      });
+    } catch {
+      // Static build fallback
+    }
   };
 
   const isCustomArtwork = (id: string) => customPrints.some((p) => p.id === id);
@@ -177,9 +254,11 @@ export function ArtworkProvider({ children }: { children: React.ReactNode }) {
         exhibitionPrints,
         collections,
         customPrints,
+        isLoading,
         addArtwork,
         updateArtwork,
         deleteArtwork,
+        refreshArtworks,
         isCustomArtwork,
       }}
     >

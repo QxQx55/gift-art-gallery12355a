@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import Gallery3D from '../components/Gallery3D';
 import ArtworkDetailModal from '../components/ArtworkDetailModal';
 import { ArtworkPrint } from '../data/artworks';
@@ -13,13 +13,16 @@ import {
   RotateCcw,
   Palette,
   Eye,
-  CheckCircle2
+  CheckCircle2,
+  Compass
 } from 'lucide-react';
 
 export default function Home() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const initialArtworkId = searchParams.get('artwork') || undefined;
   const { formatPrice } = useCart();
-  const { collections } = useArtworks();
+  const { collections, customPrints, allPrints } = useArtworks();
   const [selectedArtwork, setSelectedArtwork] = useState<ArtworkPrint | null>(null);
 
   // Featured collections
@@ -36,6 +39,7 @@ export default function Home() {
         <Gallery3D
           onSelectArtwork={(art) => setSelectedArtwork(art)}
           onEnterCollection={handleEnterCollection}
+          initialArtworkId={initialArtworkId}
         />
       </section>
 
@@ -60,10 +64,83 @@ export default function Home() {
             to='/products'
             className='px-6 py-3 bg-zinc-900 hover:bg-black text-white text-xs font-bold uppercase tracking-widest rounded-full transition-all flex items-center gap-2 group shrink-0'
           >
-            <span>Browse All 125 Prints</span>
+            <span>Browse All {allPrints.length} Prints</span>
             <ArrowRight size={14} className='group-hover:translate-x-1 transition-transform' />
           </Link>
         </div>
+
+        {/* ADMIN CURATED EXHIBITION HIGHLIGHTS (WHEN CUSTOM WORKS EXIST) */}
+        {customPrints.length > 0 && (
+          <div className='mt-12 p-6 sm:p-8 rounded-3xl bg-white border border-amber-200/80 shadow-sm'>
+            <div className='flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6'>
+              <div>
+                <div className='text-[10px] font-bold uppercase tracking-[0.25em] text-amber-600 flex items-center gap-1.5'>
+                  <Sparkles size={12} />
+                  <span>Featured Studio Additions</span>
+                </div>
+                <h3 className='text-xl sm:text-2xl font-black uppercase tracking-tight text-zinc-950 mt-0.5'>
+                  Newly Added Exhibition Works ({customPrints.length})
+                </h3>
+              </div>
+              <Link
+                to='/admin'
+                className='text-xs font-bold uppercase tracking-wider text-zinc-600 hover:text-zinc-950 underline underline-offset-4'
+              >
+                Manage in Admin →
+              </Link>
+            </div>
+
+            <div className='grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5'>
+              {customPrints.map((art) => (
+                <div
+                  key={art.id}
+                  onClick={() => setSelectedArtwork(art)}
+                  className='group cursor-pointer bg-[#f8f8fa] rounded-2xl p-3.5 border border-zinc-200/80 hover:shadow-xl transition-all duration-300 flex flex-col justify-between'
+                >
+                  <div>
+                    <div className='aspect-[3/4] rounded-xl overflow-hidden bg-zinc-100 relative mb-3'>
+                      <img
+                        src={art.src}
+                        alt={art.title}
+                        className='w-full h-full object-cover group-hover:scale-105 transition-transform duration-500'
+                      />
+                      <span className='absolute top-2.5 left-2.5 px-2 py-0.5 rounded-full bg-amber-500 text-white text-[9px] font-bold uppercase tracking-wider shadow-xs'>
+                        New Arrival
+                      </span>
+                    </div>
+                    <div className='text-[10px] font-bold uppercase tracking-wider text-amber-700'>
+                      {art.collectionTitle}
+                    </div>
+                    <h4 className='font-black text-sm text-zinc-950 line-clamp-1 mt-0.5'>
+                      {art.title}
+                    </h4>
+                    <p className='text-xs text-zinc-500 mt-0.5 line-clamp-1'>
+                      {art.artist} • {art.year}
+                    </p>
+                  </div>
+
+                  <div className='flex items-center justify-between mt-3 pt-2.5 border-t border-zinc-200/70'>
+                    <span className='text-sm font-black text-zinc-950'>
+                      {formatPrice(art.basePrice)}
+                    </span>
+                    <button
+                      type='button'
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigate(`/?artwork=${encodeURIComponent(art.id)}`);
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                      }}
+                      className='inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-zinc-700 hover:text-amber-600'
+                    >
+                      <Compass size={12} />
+                      <span>Walk in 3D</span>
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* FEATURED COLLECTIONS GRID */}
         <div className='mt-12 space-y-14'>

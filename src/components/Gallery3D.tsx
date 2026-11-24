@@ -18,12 +18,14 @@ interface Gallery3DProps {
   onSelectArtwork: (artwork: ArtworkPrint) => void;
   onEnterCollection?: (collectionId: string) => void;
   initialCollectionId?: string;
+  initialArtworkId?: string;
 }
 
 export default function Gallery3D({
   onSelectArtwork,
   onEnterCollection,
   initialCollectionId,
+  initialArtworkId,
 }: Gallery3DProps) {
   const { exhibitionPrints, collections } = useArtworks();
   const mountRef = useRef<HTMLDivElement>(null);
@@ -72,7 +74,8 @@ export default function Gallery3D({
         collectionId: p.collectionId,
         collectionTitle: p.collectionTitle,
         wallSide: idx % 2 === 0 ? 'right' : 'left',
-        t: idx / total,
+        // Offset slot #0 slightly ahead (t = 0.02) so the first/latest artwork is visible in frame immediately at entry!
+        t: 0.02 + (idx / total) * 0.95,
       });
     });
 
@@ -133,6 +136,7 @@ export default function Gallery3D({
   useEffect(() => {
     const container = mountRef.current;
     if (!container) return;
+    activeArtIdRef.current = null;
 
     // SCENE SETUP - Clean, light architectural aesthetic
     const scene = new THREE.Scene();
@@ -340,23 +344,78 @@ export default function Gallery3D({
       matMesh.position.z = 0.041;
       group.add(matMesh);
 
-      // Artwork canvas
-      const artMat = new THREE.MeshBasicMaterial({ color: 0xeeeeee });
+      // Fallback artwork canvas generator if external host blocks WebGL CORS
+      const createFallbackArtTexture = (art: ArtworkPrint) => {
+        const canvas = document.createElement('canvas');
+        canvas.width = 512;
+        canvas.height = 680;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.fillStyle = '#18181b';
+          ctx.fillRect(0, 0, 512, 680);
+          ctx.strokeStyle = '#f59e0b';
+          ctx.lineWidth = 6;
+          ctx.strokeRect(24, 24, 464, 632);
+
+          ctx.fillStyle = '#f59e0b';
+          ctx.font = 'bold 20px -apple-system, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText(art.collectionTitle.slice(0, 28).toUpperCase(), 256, 120);
+
+          ctx.fillStyle = '#ffffff';
+          ctx.font = 'bold 34px -apple-system, sans-serif';
+          ctx.fillText(art.title.slice(0, 22), 256, 300);
+
+          ctx.fillStyle = '#a1a1aa';
+          ctx.font = '22px -apple-system, sans-serif';
+          ctx.fillText(art.artist, 256, 360);
+          ctx.fillText(`${art.medium.slice(0, 26)}`, 256, 405);
+
+          ctx.fillStyle = '#fbbf24';
+          ctx.font = 'bold 28px -apple-system, sans-serif';
+          ctx.fillText(`From $${Number(art.basePrice).toFixed(0)}`, 256, 520);
+        }
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        return tex;
+      };
+
+      // Artwork canvas with automatic aspect scaling and CORS fallback
+      const ratioScale = Math.max(0.68, Math.min(1.42, (artwork.ratio || 0.72) / (2.1 / 2.9)));
+      frameMesh.scale.x = ratioScale;
+      matMesh.scale.x = ratioScale;
+
+      const artMat = new THREE.MeshBasicMaterial({ color: 0xf4f4f6 });
+      const artMesh = new THREE.Mesh(artGeo, artMat);
+      artMesh.scale.x = ratioScale;
+      artMesh.position.z = 0.043;
+      artMesh.userData = { artwork, index, t };
+
       textureLoader.load(
         artwork.src,
         (tex) => {
           tex.colorSpace = THREE.SRGBColorSpace;
+          if (tex.image?.width && tex.image?.height) {
+            const actualScale = Math.max(
+              0.68,
+              Math.min(1.42, (tex.image.width / tex.image.height) / (2.1 / 2.9))
+            );
+            frameMesh.scale.x = actualScale;
+            matMesh.scale.x = actualScale;
+            artMesh.scale.x = actualScale;
+          }
           artMat.color.set(0xffffff);
           artMat.map = tex;
           artMat.needsUpdate = true;
         },
         undefined,
-        () => {}
+        () => {
+          artMat.color.set(0xffffff);
+          artMat.map = createFallbackArtTexture(artwork);
+          artMat.needsUpdate = true;
+        }
       );
 
-      const artMesh = new THREE.Mesh(artGeo, artMat);
-      artMesh.position.z = 0.043;
-      artMesh.userData = { artwork, index, t };
       group.add(artMesh);
       clickableMeshes.push(artMesh);
 
@@ -365,7 +424,7 @@ export default function Gallery3D({
         map: createPlaqueTexture(artwork),
       });
       const plaqueMesh = new THREE.Mesh(plaqueGeo, plaqueMat);
-      plaqueMesh.position.set(1.15 + 0.85 / 2 + 0.15, -0.9, 0.01);
+      plaqueMesh.position.set(1.15 * ratioScale + 0.85 / 2 + 0.15, -0.9, 0.01);
       group.add(plaqueMesh);
 
       // Mount on left or right wall
@@ -487,13 +546,24 @@ export default function Gallery3D({
     container.addEventListener('touchstart', onTouchStart, { passive: true });
     container.addEventListener('touchmove', onTouchMove, { passive: true });
 
-    if (initialCollectionId) {
+    if (initialArtworkId) {
+      const foundArt = exhibitionItems.find(
+        (it) => it.artwork.id === initialArtworkId
+      );
+      if (foundArt) {
+        // Position camera ~0.015 ahead so artwork sits prominently on the wall in front of the viewer
+        const approachT = (foundArt.t - 0.016 + 1) % 1;
+        stateRef.current.progress = approachT;
+        stateRef.current.targetProgress = approachT;
+      }
+    } else if (initialCollectionId) {
       const found = exhibitionItems.find(
         (it) => it.artwork.collectionId === initialCollectionId
       );
       if (found) {
-        stateRef.current.progress = found.t;
-        stateRef.current.targetProgress = found.t;
+        const approachT = (found.t - 0.016 + 1) % 1;
+        stateRef.current.progress = approachT;
+        stateRef.current.targetProgress = approachT;
       }
     }
 
@@ -641,7 +711,7 @@ export default function Gallery3D({
       artGeo.dispose();
       plaqueGeo.dispose();
     };
-  }, [exhibitionItems, initialCollectionId]);
+  }, [exhibitionItems, initialCollectionId, initialArtworkId]);
 
   const jumpToCollection = (colId: string) => {
     const item = exhibitionItems.find((it) => it.artwork.collectionId === colId);

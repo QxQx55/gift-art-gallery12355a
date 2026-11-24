@@ -5,6 +5,7 @@ import path from "path";
 import checker from "vite-plugin-checker";
 
 import dns from "node:dns";
+import { artworkApiPlugin } from "./viteArtworkApi";
 
 dns.setDefaultResultOrder("verbatim");
 
@@ -16,11 +17,15 @@ export default defineConfig({
     checker({
       typescript: true,
     }),
+    artworkApiPlugin(__dirname),
   ],
   server: {
     port: 3000,
     host: true,
     allowedHosts: true,
+    watch: {
+      ignored: ["**/data/**"],
+    },
   },
   preview: {
     port: 3000,
