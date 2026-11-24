@@ -49,6 +49,7 @@
     "@tailwindcss/vite": "^4.1.14",
     "@tanstack/react-query": "^5.90.3",
     "@types/react-router-dom": "^5.3.3",
+    "@types/three": "^0.187.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
@@ -70,6 +71,7 @@
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.3.1",
     "tailwindcss-animate": "^1.0.7",
+    "three": "^0.187.0",
     "vaul": "^1.1.2",
     "zod": "^4.1.11"
   },
