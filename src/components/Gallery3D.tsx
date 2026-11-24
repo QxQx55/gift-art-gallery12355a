@@ -12,9 +12,7 @@ import {
   Sparkles,
   MousePointer,
   DoorOpen,
-  ArrowRight,
-  UserCheck,
-  Compass
+  ArrowRight
 } from 'lucide-react';
 
 interface Gallery3DProps {
@@ -36,10 +34,9 @@ export default function Gallery3D({
   const [hoveredPrint, setHoveredPrint] = useState<ArtworkPrint | null>(null);
   const [currentProgressPct, setCurrentProgressPct] = useState(0);
   const [isAtGate, setIsAtGate] = useState(true);
-  const [isFaceToFace, setIsFaceToFace] = useState(false);
-  const [currentIndex, setCurrentIndex] = useState(0);
+  const [currentArtworkIndex, setCurrentArtworkIndex] = useState(0);
 
-  // Motion and Camera state
+  // State reference - pure performance, stable motion
   const stateRef = useRef({
     progress: 0.992,
     targetProgress: 0.992,
@@ -49,14 +46,12 @@ export default function Gallery3D({
     mouseNormX: 0,
     mouseNormY: 0,
     keys: new Set<string>(),
-    viewMode: 'corridor' as 'corridor' | 'face-to-face',
-    blendFactor: 0, // 0 = corridor, 1 = face-to-face
-    faceCamPos: new THREE.Vector3(),
-    faceLookTarget: new THREE.Vector3(),
     artworkIndex: 0,
+    isUserActivelyWalking: false,
+    lastWalkTime: 0,
   });
 
-  // Exhibition artworks distributed on Left & Right Walls
+  // 36 Curated Artworks placed alternately along Left & Right Walls
   const exhibitionItems = React.useMemo(() => {
     const list: {
       artwork: ArtworkPrint;
@@ -64,101 +59,52 @@ export default function Gallery3D({
       collectionTitle: string;
       wallSide: 'left' | 'right';
       t: number;
-      artPos: THREE.Vector3;
-      inwardNorm: THREE.Vector3;
     }[] = [];
 
     const prints = ALL_PRINTS.slice(0, 36);
     const total = prints.length;
 
-    // Spline reference for precomputing positions
-    const pts = [
-      new THREE.Vector3(0, 0, 0),
-      new THREE.Vector3(28, 0, 16),
-      new THREE.Vector3(60, 0, 0),
-      new THREE.Vector3(80, 0, -32),
-      new THREE.Vector3(65, 0, -70),
-      new THREE.Vector3(22, 0, -88),
-      new THREE.Vector3(-22, 0, -88),
-      new THREE.Vector3(-65, 0, -70),
-      new THREE.Vector3(-80, 0, -32),
-      new THREE.Vector3(-60, 0, 0),
-      new THREE.Vector3(-28, 0, 16),
-    ];
-    const spline = new THREE.CatmullRomCurve3(pts, true, 'centripetal', 0.5);
-    const up = new THREE.Vector3(0, 1, 0);
-    const tunnelHalfWidth = 4.0;
-
     prints.forEach((p, idx) => {
+      // Space between t = 0.05 and t = 0.95 (grand entrance at t = 0)
       const t = 0.05 + (idx / total) * 0.9;
-      const pt = spline.getPointAt(t);
-      const tan = spline.getTangentAt(t);
-      const norm = new THREE.Vector3().crossVectors(tan, up).normalize();
-      const wallSide: 'left' | 'right' = idx % 2 === 0 ? 'right' : 'left';
-
-      const wallOffset = wallSide === 'right' ? tunnelHalfWidth - 0.08 : -tunnelHalfWidth + 0.08;
-      const artPos = pt.clone().add(norm.clone().multiplyScalar(wallOffset));
-      artPos.y = 2.1; // Museum eye level
-
-      const inwardNorm = wallSide === 'right' ? norm.clone().negate() : norm.clone();
-
       list.push({
         artwork: p,
         collectionId: p.collectionId,
         collectionTitle: p.collectionTitle,
-        wallSide,
+        wallSide: idx % 2 === 0 ? 'right' : 'left',
         t,
-        artPos,
-        inwardNorm,
       });
     });
 
     return list;
   }, []);
 
-  // Set up Face-to-Face target for a specific artwork index
-  const setFaceToFaceTarget = useCallback((index: number) => {
-    const item = exhibitionItems[index];
-    if (!item) return;
+  // Step walk to next artwork stop (realistic, not too close)
+  const stepToArtwork = useCallback((direction: 'next' | 'prev') => {
+    const total = exhibitionItems.length;
+    let nextIdx: number;
 
-    stateRef.current.artworkIndex = index;
-    stateRef.current.viewMode = 'face-to-face';
-    stateRef.current.targetProgress = item.t;
+    if (direction === 'next') {
+      nextIdx = (stateRef.current.artworkIndex + 1) % total;
+    } else {
+      nextIdx = (stateRef.current.artworkIndex - 1 + total) % total;
+    }
 
-    // Optimal standing spot in front of the artwork:
-    // Stand 3.2 units away along the inward normal vector, directly facing the canvas
-    const viewingDistance = 3.2;
-    stateRef.current.faceCamPos.copy(
-      item.artPos.clone().add(item.inwardNorm.clone().multiplyScalar(viewingDistance))
-    );
-    // Eye height of viewer matches center of painting
-    stateRef.current.faceCamPos.y = 2.1;
+    stateRef.current.artworkIndex = nextIdx;
+    setCurrentArtworkIndex(nextIdx);
 
-    // Look target is the exact center of the artwork canvas
-    stateRef.current.faceLookTarget.copy(item.artPos);
+    const targetItem = exhibitionItems[nextIdx];
+    if (targetItem) {
+      stateRef.current.targetProgress = targetItem.t;
+      stateRef.current.isUserActivelyWalking = false;
+      stateRef.current.lastWalkTime = performance.now();
 
-    setActiveArtwork(item.artwork);
-    const col = ART_COLLECTIONS.find((c) => c.id === item.artwork.collectionId);
-    if (col) setActiveCollection(col);
-
-    setIsFaceToFace(true);
-    setCurrentIndex(index);
-    setIsAtGate(false);
+      setActiveArtwork(targetItem.artwork);
+      const col = ART_COLLECTIONS.find((c) => c.id === targetItem.artwork.collectionId);
+      if (col) setActiveCollection(col);
+      setIsAtGate(false);
+    }
   }, [exhibitionItems]);
-
-  // Handle "<" (Previous Artwork Face-to-Face)
-  const handlePrevFaceToFace = useCallback(() => {
-    const total = exhibitionItems.length;
-    const newIdx = (stateRef.current.artworkIndex - 1 + total) % total;
-    setFaceToFaceTarget(newIdx);
-  }, [exhibitionItems.length, setFaceToFaceTarget]);
-
-  // Handle ">" (Next Artwork Face-to-Face)
-  const handleNextFaceToFace = useCallback(() => {
-    const total = exhibitionItems.length;
-    const newIdx = (stateRef.current.artworkIndex + 1) % total;
-    setFaceToFaceTarget(newIdx);
-  }, [exhibitionItems.length, setFaceToFaceTarget]);
 
   // Web Audio Ambiance
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -223,7 +169,7 @@ export default function Gallery3D({
     // CAMERA
     const width = container.clientWidth;
     const height = container.clientHeight;
-    const camera = new THREE.PerspectiveCamera(52, width / height, 0.1, 140);
+    const camera = new THREE.PerspectiveCamera(50, width / height, 0.1, 140);
 
     // RENDERER
     const renderer = new THREE.WebGLRenderer({
@@ -267,7 +213,7 @@ export default function Gallery3D({
       0.5
     );
 
-    const tunnelHalfWidth = 4.0;
+    const tunnelHalfWidth = 4.2; // Generous 8.4m wide corridor
     const tunnelHeight = 5.4;
     const upVector = new THREE.Vector3(0, 1, 0);
 
@@ -357,7 +303,7 @@ export default function Gallery3D({
     scene.add(new THREE.Mesh(ceilingGeo, ceilingMat));
 
     // ==========================================
-    // 🏛️ THE GRAND ART-DECORATED MAIN ENTRANCE GATE
+    // 🏛️ GRAND ART-DECORATED MAIN ENTRANCE GATE
     // ==========================================
     const gatePoint = tunnelSpline.getPointAt(0);
     const gateTan = tunnelSpline.getTangentAt(0);
@@ -460,8 +406,9 @@ export default function Gallery3D({
 
     scene.add(grandGateGroup);
 
-    // STATIC CLICK TARGET ARRAY (NO GC IN ANIMATE LOOP)
+    // STATIC CLICK TARGET ARRAY
     const clickableMeshes: THREE.Mesh[] = [];
+    const paintingPositions: { pos: THREE.Vector3; wallSide: 'left' | 'right'; t: number; index: number }[] = [];
     const textureLoader = new THREE.TextureLoader();
 
     const frameGeo = new THREE.BoxGeometry(2.35, 3.15, 0.08);
@@ -505,7 +452,10 @@ export default function Gallery3D({
 
     // POPULATE PAINTINGS ON LEFT AND RIGHT WALLS
     exhibitionItems.forEach((item, index) => {
-      const { artwork, artPos, inwardNorm } = item;
+      const { artwork, wallSide, t } = item;
+      const pt = tunnelSpline.getPointAt(t);
+      const tan = tunnelSpline.getTangentAt(t);
+      const norm = new THREE.Vector3().crossVectors(tan, upVector).normalize();
 
       const group = new THREE.Group();
 
@@ -531,7 +481,7 @@ export default function Gallery3D({
 
       const artMesh = new THREE.Mesh(artGeo, artMat);
       artMesh.position.z = 0.043;
-      artMesh.userData = { artwork, index, t: item.t };
+      artMesh.userData = { artwork, index, t };
       group.add(artMesh);
       clickableMeshes.push(artMesh);
 
@@ -542,8 +492,15 @@ export default function Gallery3D({
       plaqueMesh.position.set(1.15 + 0.85 / 2 + 0.15, -0.9, 0.01);
       group.add(plaqueMesh);
 
-      group.position.copy(artPos);
-      const lookTarget = artPos.clone().add(inwardNorm);
+      const wallOffset = wallSide === 'right' ? tunnelHalfWidth - 0.08 : -tunnelHalfWidth + 0.08;
+      const pos = pt.clone().add(norm.clone().multiplyScalar(wallOffset));
+      pos.y = 2.1;
+      group.position.copy(pos);
+
+      paintingPositions.push({ pos, wallSide, t, index });
+
+      const inwardNormal = wallSide === 'right' ? norm.clone().negate() : norm.clone();
+      const lookTarget = pos.clone().add(inwardNormal);
       group.lookAt(lookTarget);
 
       scene.add(group);
@@ -574,14 +531,9 @@ export default function Gallery3D({
       if (stateRef.current.isPointerDown) {
         const deltaX = e.clientX - stateRef.current.lastX;
         stateRef.current.lastX = e.clientX;
-
-        // If in face-to-face mode, horizontal drag smoothly transitions back to corridor walk
-        if (stateRef.current.viewMode === 'face-to-face' && Math.abs(deltaX) > 4) {
-          stateRef.current.viewMode = 'corridor';
-          setIsFaceToFace(false);
-        }
-
         stateRef.current.targetProgress -= deltaX * 0.0012;
+        stateRef.current.isUserActivelyWalking = true;
+        stateRef.current.lastWalkTime = performance.now();
       }
     };
 
@@ -593,28 +545,23 @@ export default function Gallery3D({
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       const delta = Math.abs(e.deltaY) > Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
-
-      // Scrolling smoothly resumes corridor walking
-      if (stateRef.current.viewMode === 'face-to-face') {
-        stateRef.current.viewMode = 'corridor';
-        setIsFaceToFace(false);
-      }
-
       stateRef.current.targetProgress += delta * 0.0009;
+      stateRef.current.isUserActivelyWalking = true;
+      stateRef.current.lastWalkTime = performance.now();
     };
 
     const onKeyDown = (e: KeyboardEvent) => {
       stateRef.current.keys.add(e.code);
 
-      // Left arrow = Previous Face-to-Face artwork!
+      // Left arrow = Step to previous artwork stop along the walk
       if (e.key === 'ArrowLeft') {
         e.preventDefault();
-        handlePrevFaceToFace();
+        stepToArtwork('prev');
       }
-      // Right arrow = Next Face-to-Face artwork!
+      // Right arrow = Step to next artwork stop along the walk
       else if (e.key === 'ArrowRight') {
         e.preventDefault();
-        handleNextFaceToFace();
+        stepToArtwork('next');
       }
       else if (e.key === 'Enter' || e.key === 'Space') {
         if (activeArtwork) {
@@ -636,8 +583,10 @@ export default function Gallery3D({
       if (hits.length > 0) {
         const hit = hits[0].object;
         if (hit.userData?.artwork && typeof hit.userData.index === 'number') {
-          // Clicking directly on an artwork locks onto it face-to-face!
-          setFaceToFaceTarget(hit.userData.index);
+          const idx = hit.userData.index;
+          stateRef.current.artworkIndex = idx;
+          stateRef.current.targetProgress = hit.userData.t;
+          setCurrentArtworkIndex(idx);
           onSelectArtwork(hit.userData.artwork);
         }
       }
@@ -650,11 +599,9 @@ export default function Gallery3D({
     const onTouchMove = (e: TouchEvent) => {
       const deltaX = touchStartX - e.touches[0].clientX;
       touchStartX = e.touches[0].clientX;
-      if (stateRef.current.viewMode === 'face-to-face') {
-        stateRef.current.viewMode = 'corridor';
-        setIsFaceToFace(false);
-      }
       stateRef.current.targetProgress += deltaX * 0.0016;
+      stateRef.current.isUserActivelyWalking = true;
+      stateRef.current.lastWalkTime = performance.now();
     };
 
     container.addEventListener('mousedown', onMouseDown);
@@ -672,15 +619,17 @@ export default function Gallery3D({
         (it) => it.artwork.collectionId === initialCollectionId
       );
       if (foundIdx !== -1) {
-        setFaceToFaceTarget(foundIdx);
+        stateRef.current.artworkIndex = foundIdx;
+        stateRef.current.targetProgress = exhibitionItems[foundIdx].t;
+        setCurrentArtworkIndex(foundIdx);
       }
     }
 
-    // ANIMATION LOOP (SOLID 60-120 FPS, SMOOTH CORRIDOR & FACE-TO-FACE MODES)
+    // ANIMATION LOOP (REALISTIC WALK STOP VIEWING - NOT TOO CLOSE)
     let animationFrameId: number;
     let lastRaycastTime = 0;
-    const currentCamPos = new THREE.Vector3();
-    const currentLookTarget = new THREE.Vector3();
+
+    const smoothLookTarget = new THREE.Vector3();
 
     const animate = (timestamp: number) => {
       animationFrameId = requestAnimationFrame(animate);
@@ -690,18 +639,14 @@ export default function Gallery3D({
       const keyStep = isShift ? 0.003 : 0.0016;
 
       if (keys.has('KeyW') || keys.has('ArrowUp')) {
-        if (stateRef.current.viewMode === 'face-to-face') {
-          stateRef.current.viewMode = 'corridor';
-          setIsFaceToFace(false);
-        }
         stateRef.current.targetProgress += keyStep;
+        stateRef.current.isUserActivelyWalking = true;
+        stateRef.current.lastWalkTime = performance.now();
       }
       if (keys.has('KeyS') || keys.has('ArrowDown')) {
-        if (stateRef.current.viewMode === 'face-to-face') {
-          stateRef.current.viewMode = 'corridor';
-          setIsFaceToFace(false);
-        }
         stateRef.current.targetProgress -= keyStep;
+        stateRef.current.isUserActivelyWalking = true;
+        stateRef.current.lastWalkTime = performance.now();
       }
 
       stateRef.current.progress +=
@@ -711,42 +656,68 @@ export default function Gallery3D({
       setCurrentProgressPct(p);
 
       const atGate = p < 0.04 || p > 0.965;
-      setIsAtGate(atGate && stateRef.current.viewMode !== 'face-to-face');
+      setIsAtGate(atGate);
 
-      // CORRIDOR WALKING CAMERA POSITION & TARGET
+      // CAMERA POSITION (In the center of the corridor at 2.0m eye-height)
+      // Generous distance ("not too close") so whole artwork and hall are visible
       const eyeHeight = 2.0;
-      const corridorCamPos = tunnelSpline.getPointAt(p);
-      corridorCamPos.y = eyeHeight;
+      const camPos = tunnelSpline.getPointAt(p);
+      camPos.y = eyeHeight;
+      camera.position.copy(camPos);
 
+      // CAMERA GAZE CALCULATION
       const forwardTangent = tunnelSpline.getTangentAt(p);
-      const lookOffsetDist = 12.0;
-      const corridorLookTarget = corridorCamPos
-        .clone()
-        .add(forwardTangent.clone().multiplyScalar(lookOffsetDist));
-
       const corridorNormal = new THREE.Vector3()
         .crossVectors(forwardTangent, upVector)
         .normalize();
 
-      corridorLookTarget.add(
-        corridorNormal.clone().multiplyScalar(-stateRef.current.mouseNormX * 3.2)
+      // Find closest artwork stop
+      let closestItem = exhibitionItems[0];
+      let closestIdx = 0;
+      let minDiff = 1;
+
+      exhibitionItems.forEach((item, idx) => {
+        let diff = Math.abs(item.t - p);
+        if (diff > 0.5) diff = 1 - diff;
+        if (diff < minDiff) {
+          minDiff = diff;
+          closestItem = item;
+          closestIdx = idx;
+        }
+      });
+
+      // Forward corridor look point
+      const forwardLookTarget = camPos
+        .clone()
+        .add(forwardTangent.clone().multiplyScalar(12.0));
+      // Subtle mouse glance
+      forwardLookTarget.add(
+        corridorNormal.clone().multiplyScalar(-stateRef.current.mouseNormX * 2.5)
       );
-      corridorLookTarget.y += stateRef.current.mouseNormY * 0.8;
+      forwardLookTarget.y += stateRef.current.mouseNormY * 0.7;
 
-      // BLEND FACTOR FOR FACE-TO-FACE INSPECTION
-      const targetBlend = stateRef.current.viewMode === 'face-to-face' ? 1.0 : 0.0;
-      stateRef.current.blendFactor +=
-        (targetBlend - stateRef.current.blendFactor) * 0.10;
-      const b = stateRef.current.blendFactor;
+      // When walking pauses / stops near an artwork:
+      // The camera gaze naturally angles gently toward that artwork on the left/right wall
+      // Standing at a comfortable distance (4-5 meters back in the corridor, NOT pressed against the canvas!)
+      const timeSinceWalk = timestamp - stateRef.current.lastWalkTime;
+      const isStopped = !stateRef.current.isPointerDown && timeSinceWalk > 300 && minDiff < 0.04;
 
-      // Interpolate smoothly between corridor walk and face-to-face view!
-      currentCamPos.lerpVectors(corridorCamPos, stateRef.current.faceCamPos, b);
-      currentLookTarget.lerpVectors(corridorLookTarget, stateRef.current.faceLookTarget, b);
+      let targetGazePoint = forwardLookTarget;
 
-      camera.position.copy(currentCamPos);
-      camera.lookAt(currentLookTarget);
+      if (isStopped && !atGate) {
+        // Look comfortably toward the artwork on the wall (perpendicular with pleasant depth)
+        const artStop = paintingPositions[closestIdx];
+        if (artStop) {
+          // Look target is the artwork center, naturally composed
+          targetGazePoint = artStop.pos.clone();
+        }
+      }
 
-      // Throttled raycasting
+      // Smoothly blend gaze direction so stopping at an artwork feels completely natural
+      smoothLookTarget.lerp(targetGazePoint, 0.1);
+      camera.lookAt(smoothLookTarget);
+
+      // Throttled raycasting for hover
       if (timestamp - lastRaycastTime > 90) {
         lastRaycastTime = timestamp;
         raycaster.setFromCamera(pointer, camera);
@@ -765,31 +736,15 @@ export default function Gallery3D({
         }
       }
 
-      // Track closest artwork when in corridor mode
-      if (stateRef.current.viewMode === 'corridor') {
-        let closestItem = exhibitionItems[0];
-        let closestIdx = 0;
-        let minDiff = 1;
-
-        exhibitionItems.forEach((item, idx) => {
-          let diff = Math.abs(item.t - p);
-          if (diff > 0.5) diff = 1 - diff;
-          if (diff < minDiff) {
-            minDiff = diff;
-            closestItem = item;
-            closestIdx = idx;
-          }
-        });
-
-        if (closestItem && closestItem.artwork.id !== activeArtwork?.id) {
-          setActiveArtwork(closestItem.artwork);
-          stateRef.current.artworkIndex = closestIdx;
-          setCurrentIndex(closestIdx);
-          const col = ART_COLLECTIONS.find(
-            (c) => c.id === closestItem.artwork.collectionId
-          );
-          if (col) setActiveCollection(col);
-        }
+      // Update active artwork card at bottom
+      if (closestItem && closestItem.artwork.id !== activeArtwork?.id) {
+        setActiveArtwork(closestItem.artwork);
+        stateRef.current.artworkIndex = closestIdx;
+        setCurrentArtworkIndex(closestIdx);
+        const col = ART_COLLECTIONS.find(
+          (c) => c.id === closestItem.artwork.collectionId
+        );
+        if (col) setActiveCollection(col);
       }
 
       renderer.render(scene, camera);
@@ -841,24 +796,23 @@ export default function Gallery3D({
       carpetGeo.dispose();
       carpetMat.dispose();
     };
-  }, [exhibitionItems, onSelectArtwork, initialCollectionId, activeArtwork?.id, handleNextFaceToFace, handlePrevFaceToFace, setFaceToFaceTarget]);
+  }, [exhibitionItems, onSelectArtwork, initialCollectionId, activeArtwork?.id, stepToArtwork]);
 
   const jumpToCollection = (colId: string) => {
     const itemIdx = exhibitionItems.findIndex((it) => it.artwork.collectionId === colId);
     if (itemIdx !== -1) {
-      setFaceToFaceTarget(itemIdx);
+      stateRef.current.artworkIndex = itemIdx;
+      stateRef.current.targetProgress = exhibitionItems[itemIdx].t;
+      setCurrentArtworkIndex(itemIdx);
+      stateRef.current.isUserActivelyWalking = false;
+      stateRef.current.lastWalkTime = performance.now();
     }
   };
 
   const walkThroughGate = () => {
-    stateRef.current.viewMode = 'corridor';
-    setIsFaceToFace(false);
-    stateRef.current.targetProgress = 0.06;
-  };
-
-  const resumeCorridorWalk = () => {
-    stateRef.current.viewMode = 'corridor';
-    setIsFaceToFace(false);
+    stateRef.current.targetProgress = 0.05;
+    stateRef.current.isUserActivelyWalking = true;
+    stateRef.current.lastWalkTime = performance.now();
   };
 
   return (
@@ -871,8 +825,6 @@ export default function Gallery3D({
         <div className='pointer-events-auto flex items-center gap-2 overflow-x-auto py-1 max-w-[70vw] no-scrollbar'>
           <button
             onClick={() => {
-              stateRef.current.viewMode = 'corridor';
-              setIsFaceToFace(false);
               stateRef.current.targetProgress = 0.992;
             }}
             className='px-3.5 py-1.5 text-xs uppercase tracking-wider font-bold rounded-full bg-amber-500 hover:bg-amber-600 text-white shadow-md transition-all flex items-center gap-1.5 whitespace-nowrap'
@@ -918,22 +870,21 @@ export default function Gallery3D({
         </div>
       </div>
 
-      {/* 🎯 "<" AND ">" BUTTONS: FACE-TO-FACE ARTWORK INSPECTION TOUR */}
-      {/* Clicking "<" or ">" points the camera directly perpendicular to the artwork so you look at it FACE TO FACE */}
+      {/* 🎯 "<" AND ">" BUTTONS: WALK DIRECTLY TO PREVIOUS / NEXT ARTWORK STOP */}
       <button
-        onClick={handlePrevFaceToFace}
+        onClick={() => stepToArtwork('prev')}
         className='absolute left-4 top-1/2 -translate-y-1/2 z-30 p-3.5 rounded-full bg-white/90 hover:bg-white text-zinc-900 shadow-xl border border-zinc-300 backdrop-blur-md transition-all hover:scale-110 active:scale-95 group'
-        title='Previous Artwork (Face-to-Face View)'
-        aria-label='Previous Artwork Face-to-Face'
+        title='Walk to Previous Artwork'
+        aria-label='Walk to Previous Artwork'
       >
         <ChevronLeft size={24} className='group-hover:-translate-x-0.5 transition-transform' />
       </button>
 
       <button
-        onClick={handleNextFaceToFace}
+        onClick={() => stepToArtwork('next')}
         className='absolute right-4 top-1/2 -translate-y-1/2 z-30 p-3.5 rounded-full bg-white/90 hover:bg-white text-zinc-900 shadow-xl border border-zinc-300 backdrop-blur-md transition-all hover:scale-110 active:scale-95 group'
-        title='Next Artwork (Face-to-Face View)'
-        aria-label='Next Artwork Face-to-Face'
+        title='Walk to Next Artwork'
+        aria-label='Walk to Next Artwork'
       >
         <ChevronRight size={24} className='group-hover:translate-x-0.5 transition-transform' />
       </button>
@@ -943,14 +894,14 @@ export default function Gallery3D({
         <div className='pointer-events-none absolute bottom-32 left-1/2 -translate-x-1/2 z-30 bg-zinc-950/90 text-white px-4 py-2 rounded-full backdrop-blur-md shadow-2xl text-xs flex items-center gap-2 border border-white/10 animate-fade-in'>
           <Eye size={14} className='text-amber-400' />
           <span>
-            Click to view face-to-face:{' '}
+            Click to inspect:{' '}
             <strong className='font-semibold'>{hoveredPrint.title}</strong>
           </span>
           <span className='text-zinc-400'>• From ${hoveredPrint.basePrice}</span>
         </div>
       )}
 
-      {/* BOTTOM CENTER: INTUITIVE STATUS & FACE-TO-FACE BADGE */}
+      {/* BOTTOM CENTER: "YOU ARE WALKING PAST" / "WALK STOPPED AT" */}
       <div className='absolute bottom-6 left-0 right-0 z-20 flex flex-col items-center justify-center pointer-events-none text-center px-4'>
         {isAtGate ? (
           /* ENTRANCE GATE CARD */
@@ -965,32 +916,25 @@ export default function Gallery3D({
             </h2>
 
             <p className='text-xs text-zinc-300 font-medium mt-1 max-w-md'>
-              You are standing at the ceremonial entrance. Use the <strong>&lt;</strong> and <strong>&gt;</strong> buttons to inspect paintings face-to-face, or step through the gate.
+              Standing at the ceremonial entrance. Use the <strong>&lt;</strong> and <strong>&gt;</strong> buttons to walk stop-by-stop through the artworks, or step through the gate.
             </p>
 
             <button
               onClick={walkThroughGate}
               className='mt-3 px-6 py-2 bg-amber-500 hover:bg-amber-400 text-zinc-950 text-xs font-black uppercase tracking-wider rounded-full shadow-lg hover:scale-105 active:scale-95 transition-all flex items-center gap-2'
             >
-              <span>Enter Through The Gate</span>
+              <span>Step Through The Gate</span>
               <ArrowRight size={14} />
             </button>
           </div>
         ) : (
-          /* ACTIVE ARTWORK PLAQUE WITH FACE-TO-FACE INDICATOR */
+          /* ACTIVE ARTWORK PLAQUE */
           <div className='pointer-events-auto flex flex-col items-center bg-white/92 backdrop-blur-md px-8 py-3.5 rounded-2xl shadow-xl border border-zinc-200/90 transition-all hover:shadow-2xl'>
             <div className='flex items-center gap-2 mb-0.5'>
-              {isFaceToFace ? (
-                <span className='text-[10px] uppercase tracking-[0.2em] text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full font-bold flex items-center gap-1 border border-emerald-200'>
-                  <UserCheck size={11} />
-                  <span>Face-to-Face View ({exhibitionItems[currentIndex]?.wallSide?.toUpperCase()} WALL)</span>
-                </span>
-              ) : (
-                <span className='text-[10px] uppercase tracking-[0.2em] text-zinc-500 font-bold flex items-center gap-1'>
-                  <Sparkles size={11} className='text-amber-500' />
-                  <span>You Are Walking Past</span>
-                </span>
-              )}
+              <span className='text-[10px] uppercase tracking-[0.2em] text-zinc-500 font-bold flex items-center gap-1'>
+                <Sparkles size={11} className='text-amber-500' />
+                <span>You Are Walking Past</span>
+              </span>
             </div>
 
             <h2 className='text-xl sm:text-2xl font-black uppercase tracking-tight text-zinc-900'>
@@ -1003,7 +947,7 @@ export default function Gallery3D({
                 <span className='text-zinc-900 font-semibold'>
                   {activeArtwork.collectionTitle}
                 </span>{' '}
-                • {activeArtwork.artist} • Print {currentIndex + 1} of {exhibitionItems.length}
+                • {activeArtwork.artist} • Artwork {currentArtworkIndex + 1} of {exhibitionItems.length}
               </p>
             )}
 
@@ -1018,22 +962,13 @@ export default function Gallery3D({
                 </span>
               </button>
 
-              {isFaceToFace ? (
+              {onEnterCollection && activeCollection && (
                 <button
-                  onClick={resumeCorridorWalk}
+                  onClick={() => onEnterCollection(activeCollection.id)}
                   className='text-xs font-semibold text-zinc-700 hover:text-black tracking-wide underline underline-offset-4'
                 >
-                  Resume Corridor Walk →
+                  Enter Collection ({activeCollection.count} prints) →
                 </button>
-              ) : (
-                onEnterCollection && activeCollection && (
-                  <button
-                    onClick={() => onEnterCollection(activeCollection.id)}
-                    className='text-xs font-semibold text-zinc-700 hover:text-black tracking-wide underline underline-offset-4'
-                  >
-                    Enter Collection ({activeCollection.count} prints) →
-                  </button>
-                )
               )}
             </div>
           </div>
@@ -1056,10 +991,10 @@ export default function Gallery3D({
 
         <div className='text-left'>
           <div className='text-[10px] font-bold uppercase tracking-wider text-zinc-800 flex items-center gap-1.5'>
-            <span>Click &lt; or &gt; for Face-to-Face View</span>
+            <span>Click &lt; or &gt; to Walk Between Artworks</span>
           </div>
           <div className='text-[9px] text-zinc-500'>
-            Scroll or drag mouse to glide through hall
+            Scroll or drag to walk continuously • Click to inspect
           </div>
         </div>
       </div>
