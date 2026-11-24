@@ -1,98 +1,10 @@
-# React + Vite + shadcn/ui Starter Template
+# Shutabug | 3D Virtual Art Gallery & Store
 
-A modern React starter template built with Vite, TypeScript, Tailwind CSS, and shadcn/ui components.
+An immersive 3D virtual art gallery and print store celebrating Black and African culture, sports, music, and nostalgia by multidisciplinary visual artist **Mayowa Alabi (Shutabug)**.
 
-## 🚀 Features
-
-- ⚡️ **Vite** - Fast build tool and development server
-- ⚛️ **React 18** - Latest React with hooks support
-- 🎯 **TypeScript** - Type safety and better developer experience
-- 🎨 **Tailwind CSS** - Utility-first CSS framework
-- 🧩 **shadcn/ui** - Beautifully designed components built with Radix UI
-- 📦 **Path Mapping** - Clean imports with `@/` prefix
-
-## 📦 Included shadcn/ui Components
-
-- Button
-- Card
-- Input
-- Label
-- Badge
-- Dialog
-- And more...
-
-## 🛠️ Getting Started
-
-1. **Install dependencies**
-
-   ```bash
-   npm install
-   ```
-
-2. **Start development server**
-
-   ```bash
-   npm run dev
-   ```
-
-3. **Build for production**
-
-   ```bash
-   npm run build
-   ```
-
-4. **Preview production build**
-   ```bash
-   npm run preview
-   ```
-
-## 📁 Project Structure
-
-```
-src/
-├── components/
-│   └── ui/              # shadcn/ui components
-├── lib/
-│   └── utils.ts         # Utility functions
-├── App.tsx              # Main application component
-├── index.css            # Global styles with Tailwind
-└── main.tsx             # Application entry point
-```
-
-## 🎨 Customization
-
-### Adding New shadcn/ui Components
-
-This template is pre-configured with shadcn/ui. You can add more components by creating them in the `src/components/ui/` directory.
-
-### Tailwind Configuration
-
-The Tailwind configuration is set up with shadcn/ui color variables. You can customize colors and other design tokens in:
-
-- `tailwind.config.js` - Tailwind configuration
-- `src/index.css` - CSS custom properties for themes
-
-### TypeScript Configuration
-
-Path mapping is configured for clean imports:
-
-```typescript
-import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
-```
-
-## 🌗 Dark Mode
-
-The template includes dark mode support through Tailwind's `dark:` classes and CSS custom properties.
-
-## 📚 Learn More
-
-- [Vite Documentation](https://vitejs.dev/)
-- [React Documentation](https://react.dev/)
-- [Tailwind CSS](https://tailwindcss.com/)
-- [shadcn/ui](https://ui.shadcn.com/)
-- [Radix UI](https://www.radix-ui.com/)
-
-## 🤝 Contributing
-
-Wendayew fkadu
+## Features
+- **3D Rotunda Exhibition Room**: Built with Three.js, featuring curved architectural gallery walls, museum plaques, realistic lighting, and smooth inertial drag/scroll navigation.
+- **Interactive Art Purchase Experience**: Complete customization with museum-grade papers (Giclée 308gsm, Hahnemühle 310gsm), custom wood frames, and sizing (A3 to A0).
+- **'View In Room' Architectural Simulation**: Preview prints hanging in realistic scale above designer furniture.
+- **Global Shopping Bag & Multi-Currency**: Real-time conversions for USD, GBP, EUR, and NGN with promo codes and checkout simulation.
+- **Command Palette (`⌘K`)**: Instant search across all 19 collections and 125 original digital paintings.
