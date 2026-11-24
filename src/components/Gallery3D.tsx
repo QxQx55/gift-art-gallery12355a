@@ -742,3 +742,5 @@ export default function Gallery3D({
     </div>
   );
 }
+
+// Dynamic track spotlights and gallery ambient lighting updates
