@@ -1,7 +1,17 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
 import { ART_COLLECTIONS, ArtworkPrint, ALL_PRINTS } from '../data/artworks';
-import { Volume2, VolumeX, Maximize2, Compass, MoveHorizontal, ChevronLeft, ChevronRight, Info, Eye } from 'lucide-react';
+import {
+  Volume2,
+  VolumeX,
+  Maximize2,
+  Move,
+  ChevronLeft,
+  ChevronRight,
+  Eye,
+  MapPin,
+  Sparkles
+} from 'lucide-react';
 
 interface Gallery3DProps {
   onSelectArtwork: (artwork: ArtworkPrint) => void;
@@ -19,62 +29,74 @@ export default function Gallery3D({
   const [activeCollection, setActiveCollection] = useState(ART_COLLECTIONS[0]);
   const [isAudioEnabled, setIsAudioEnabled] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [compassAngle, setCompassAngle] = useState(0);
-  const [isDragging, setIsDragging] = useState(false);
   const [hoveredPrint, setHoveredPrint] = useState<ArtworkPrint | null>(null);
+  const [currentProgressPct, setCurrentProgressPct] = useState(0);
 
-  // References to keep Three.js animation state
+  // Motion and Camera State Ref
   const stateRef = useRef({
-    currentAngle: 0,
-    targetAngle: 0,
+    progress: 0, // 0 to 1 along tunnel spline
+    targetProgress: 0,
     velocity: 0,
+    yaw: 0, // horizontal look angle in radians
+    targetYaw: 0,
+    pitch: 0, // vertical look angle
+    targetPitch: 0,
     isPointerDown: false,
-    pointerStartX: 0,
-    lastPointerX: 0,
-    lastTime: performance.now(),
-    isZooming: false,
-    zoomProgress: 0,
-    selectedArtworkIndex: -1,
+    startX: 0,
+    startY: 0,
+    lastX: 0,
+    lastY: 0,
   });
 
-  // Curated list of prints for the 3D exhibition hall (curating highlights across major collections)
-  const exhibitionArtworks = React.useMemo(() => {
-    // Take highlights from each major collection so user can walk through all 19 collections seamlessly
-    const list: { artwork: ArtworkPrint; collectionIndex: number }[] = [];
-    ART_COLLECTIONS.forEach((col, cIdx) => {
-      // Pick up to 4 representative artworks per collection for the 3D gallery
-      const sample = col.prints.slice(0, 4);
-      sample.forEach((p) => {
-        list.push({ artwork: p, collectionIndex: cIdx });
+  // Curated Exhibition Artworks list for Left & Right Walls
+  const exhibitionItems = React.useMemo(() => {
+    const list: {
+      artwork: ArtworkPrint;
+      collectionId: string;
+      collectionTitle: string;
+      wallSide: 'left' | 'right';
+      t: number; // progress position on curve 0 to 1
+    }[] = [];
+
+    // Filter high quality prints across collections
+    const prints = ALL_PRINTS.slice(0, 48);
+    const total = prints.length;
+
+    prints.forEach((p, idx) => {
+      list.push({
+        artwork: p,
+        collectionId: p.collectionId,
+        collectionTitle: p.collectionTitle,
+        wallSide: idx % 2 === 0 ? 'right' : 'left',
+        t: idx / total,
       });
     });
+
     return list;
   }, []);
 
+  // Web Audio Ambiance
   const audioContextRef = useRef<AudioContext | null>(null);
-  const ambientGainRef = useRef<GainNode | null>(null);
 
-  // Web Audio ambient gallery tone
   const toggleAudio = useCallback(() => {
     if (!isAudioEnabled) {
       try {
-        const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+        const AudioCtx =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext: typeof AudioContext })
+            .webkitAudioContext;
         const ctx = new AudioCtx();
         audioContextRef.current = ctx;
 
-        // Create warm low ambient gallery room sound
         const osc = ctx.createOscillator();
         const filter = ctx.createBiquadFilter();
         const gain = ctx.createGain();
 
         osc.type = 'sine';
-        osc.frequency.setValueAtTime(55, ctx.currentTime); // low hum 55Hz
-
+        osc.frequency.setValueAtTime(55, ctx.currentTime);
         filter.type = 'lowpass';
-        filter.frequency.setValueAtTime(180, ctx.currentTime);
-
-        gain.gain.setValueAtTime(0.04, ctx.currentTime);
-        ambientGainRef.current = gain;
+        filter.frequency.setValueAtTime(160, ctx.currentTime);
+        gain.gain.setValueAtTime(0.035, ctx.currentTime);
 
         osc.connect(filter);
         filter.connect(gain);
@@ -110,115 +132,192 @@ export default function Gallery3D({
 
     // SCENE SETUP
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xf0f0f2); // Architectural gallery neutral warm grey/white
-    scene.fog = new THREE.FogExp2(0xf0f0f2, 0.025);
+    scene.background = new THREE.Color(0xf0f0f2); // Gallery light grey architectural tone
+    scene.fog = new THREE.FogExp2(0xf0f0f2, 0.018); // Soft depth haze in tunnel
 
     // CAMERA
     const width = container.clientWidth;
     const height = container.clientHeight;
-    const camera = new THREE.PerspectiveCamera(50, width / height, 0.1, 100);
-    camera.position.set(0, 0, 0); // Positioned inside rotunda looking outward at the wall
+    const camera = new THREE.PerspectiveCamera(56, width / height, 0.1, 160);
 
     // RENDERER
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      powerPreference: 'high-performance',
+    });
     renderer.setSize(width, height);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.05;
+    renderer.toneMappingExposure = 1.08;
     container.innerHTML = '';
     container.appendChild(renderer.domElement);
 
     // LIGHTING
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.9);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.95);
     scene.add(ambientLight);
 
-    const dirLight = new THREE.DirectionalLight(0xfffbf5, 1.2);
-    dirLight.position.set(0, 15, 0);
-    dirLight.castShadow = true;
-    scene.add(dirLight);
-
-    // Gallery track spotlights
-    const spotlight = new THREE.SpotLight(0xfffcf2, 1.5, 30, Math.PI / 4, 0.3, 1);
-    spotlight.position.set(0, 4, 0);
-    spotlight.castShadow = true;
-    scene.add(spotlight);
-
-    // ROTUNDA ARCHITECTURE (Curved Wall & Floor)
-    const galleryRadius = 14; // Radius of curved exhibition hall
-    const galleryHeight = 10;
-    const numPaintings = exhibitionArtworks.length;
-    const angleStep = (Math.PI * 2) / numPaintings;
-
-    // Curved rotunda wall
-    const wallGeo = new THREE.CylinderGeometry(
-      galleryRadius,
-      galleryRadius,
-      galleryHeight,
-      96,
-      1,
-      true
-    );
-    const wallMat = new THREE.MeshStandardMaterial({
-      color: 0xf5f5f7,
-      roughness: 0.95,
-      metalness: 0.02,
-      side: THREE.BackSide,
-    });
-    const wallMesh = new THREE.Mesh(wallGeo, wallMat);
-    wallMesh.position.y = 0;
-    wallMesh.receiveShadow = true;
-    scene.add(wallMesh);
-
-    // Baseboard trim molding on curved wall
-    const baseboardGeo = new THREE.CylinderGeometry(
-      galleryRadius - 0.05,
-      galleryRadius - 0.05,
+    // Moving spotlight anchored ahead of user's walk
+    const followSpotlight = new THREE.SpotLight(
+      0xfffaee,
+      2.0,
+      35,
+      Math.PI / 3,
       0.35,
-      96,
-      1,
-      true
+      1
     );
-    const baseboardMat = new THREE.MeshStandardMaterial({
-      color: 0xdcdce0,
-      roughness: 0.8,
-      side: THREE.BackSide,
-    });
-    const baseboard = new THREE.Mesh(baseboardGeo, baseboardMat);
-    baseboard.position.y = -galleryHeight / 2 + 0.18;
-    scene.add(baseboard);
+    followSpotlight.castShadow = true;
+    scene.add(followSpotlight);
 
-    // Gallery Floor
-    const floorGeo = new THREE.CircleGeometry(galleryRadius + 1, 96);
+    // BUILD THE 3D CURVED TUNNEL SPLINE PATH
+    // An architectural curved gallery loop corridor
+    const tunnelControlPoints = [
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(25, 0, 18),
+      new THREE.Vector3(55, 0, 5),
+      new THREE.Vector3(75, 0, -28),
+      new THREE.Vector3(60, 0, -65),
+      new THREE.Vector3(20, 0, -82),
+      new THREE.Vector3(-20, 0, -82),
+      new THREE.Vector3(-60, 0, -65),
+      new THREE.Vector3(-75, 0, -28),
+      new THREE.Vector3(-55, 0, 5),
+      new THREE.Vector3(-25, 0, 18),
+    ];
+
+    const tunnelSpline = new THREE.CatmullRomCurve3(
+      tunnelControlPoints,
+      true,
+      'centripetal',
+      0.5
+    );
+
+    // TUNNEL ARCHITECTURE DIMENSIONS
+    const tunnelHalfWidth = 3.8; // 7.6m wide corridor
+    const tunnelHeight = 5.2; // 5.2m ceiling
+    const upVector = new THREE.Vector3(0, 1, 0);
+
+    // GENERATE TUNNEL WALLS, FLOOR & CEILING MESHES
+    const segments = 240;
+    const floorPositions: number[] = [];
+    const floorIndices: number[] = [];
+    const leftWallPositions: number[] = [];
+    const leftWallIndices: number[] = [];
+    const rightWallPositions: number[] = [];
+    const rightWallIndices: number[] = [];
+    const ceilingPositions: number[] = [];
+    const ceilingIndices: number[] = [];
+
+    for (let i = 0; i <= segments; i++) {
+      const t = (i / segments) % 1;
+      const pt = tunnelSpline.getPointAt(t);
+      const tan = tunnelSpline.getTangentAt(t);
+      const norm = new THREE.Vector3().crossVectors(tan, upVector).normalize();
+
+      // Left and right wall coordinates at floor (y = 0) and ceiling (y = tunnelHeight)
+      const leftFloor = pt.clone().sub(norm.clone().multiplyScalar(tunnelHalfWidth));
+      const rightFloor = pt.clone().add(norm.clone().multiplyScalar(tunnelHalfWidth));
+      const leftCeil = leftFloor.clone().setY(tunnelHeight);
+      const rightCeil = rightFloor.clone().setY(tunnelHeight);
+
+      // Floor (left to right at y = 0)
+      floorPositions.push(leftFloor.x, 0, leftFloor.z);
+      floorPositions.push(rightFloor.x, 0, rightFloor.z);
+
+      // Left Wall (from y = 0 to y = tunnelHeight)
+      leftWallPositions.push(leftFloor.x, 0, leftFloor.z);
+      leftWallPositions.push(leftCeil.x, tunnelHeight, leftCeil.z);
+
+      // Right Wall (from y = 0 to y = tunnelHeight)
+      rightWallPositions.push(rightFloor.x, 0, rightFloor.z);
+      rightWallPositions.push(rightCeil.x, tunnelHeight, rightCeil.z);
+
+      // Ceiling (left to right at y = tunnelHeight)
+      ceilingPositions.push(leftCeil.x, tunnelHeight, leftCeil.z);
+      ceilingPositions.push(rightCeil.x, tunnelHeight, rightCeil.z);
+
+      if (i < segments) {
+        const v1 = i * 2;
+        const v2 = v1 + 1;
+        const v3 = (i + 1) * 2;
+        const v4 = v3 + 1;
+
+        // Quad triangles
+        floorIndices.push(v1, v2, v3, v2, v4, v3);
+        leftWallIndices.push(v1, v3, v2, v2, v3, v4);
+        rightWallIndices.push(v1, v2, v3, v2, v4, v3);
+        ceilingIndices.push(v1, v3, v2, v2, v3, v4);
+      }
+    }
+
+    // Floor Mesh
+    const floorGeo = new THREE.BufferGeometry();
+    floorGeo.setAttribute('position', new THREE.Float32BufferAttribute(floorPositions, 3));
+    floorGeo.setIndex(floorIndices);
+    floorGeo.computeVertexNormals();
     const floorMat = new THREE.MeshStandardMaterial({
-      color: 0xe6e6ea,
-      roughness: 0.4,
+      color: 0xe5e5e8,
+      roughness: 0.35,
       metalness: 0.08,
     });
     const floorMesh = new THREE.Mesh(floorGeo, floorMat);
-    floorMesh.rotation.x = -Math.PI / 2;
-    floorMesh.position.y = -galleryHeight / 2;
     floorMesh.receiveShadow = true;
     scene.add(floorMesh);
 
-    // Gallery Ceiling with recessed skylight
-    const ceilingGeo = new THREE.CircleGeometry(galleryRadius, 64);
+    // Left Wall Mesh
+    const leftWallGeo = new THREE.BufferGeometry();
+    leftWallGeo.setAttribute('position', new THREE.Float32BufferAttribute(leftWallPositions, 3));
+    leftWallGeo.setIndex(leftWallIndices);
+    leftWallGeo.computeVertexNormals();
+    const wallMat = new THREE.MeshStandardMaterial({
+      color: 0xf4f4f6,
+      roughness: 0.95,
+      side: THREE.DoubleSide,
+    });
+    const leftWallMesh = new THREE.Mesh(leftWallGeo, wallMat);
+    leftWallMesh.receiveShadow = true;
+    scene.add(leftWallMesh);
+
+    // Right Wall Mesh
+    const rightWallGeo = new THREE.BufferGeometry();
+    rightWallGeo.setAttribute('position', new THREE.Float32BufferAttribute(rightWallPositions, 3));
+    rightWallGeo.setIndex(rightWallIndices);
+    rightWallGeo.computeVertexNormals();
+    const rightWallMesh = new THREE.Mesh(rightWallGeo, wallMat);
+    rightWallMesh.receiveShadow = true;
+    scene.add(rightWallMesh);
+
+    // Ceiling Mesh
+    const ceilingGeo = new THREE.BufferGeometry();
+    ceilingGeo.setAttribute('position', new THREE.Float32BufferAttribute(ceilingPositions, 3));
+    ceilingGeo.setIndex(ceilingIndices);
+    ceilingGeo.computeVertexNormals();
     const ceilingMat = new THREE.MeshStandardMaterial({
-      color: 0xf8f8fa,
+      color: 0xfbfbfd,
       roughness: 0.9,
+      side: THREE.DoubleSide,
     });
     const ceilingMesh = new THREE.Mesh(ceilingGeo, ceilingMat);
-    ceilingMesh.rotation.x = Math.PI / 2;
-    ceilingMesh.position.y = galleryHeight / 2;
     scene.add(ceilingMesh);
 
-    // TEXTURE LOADER & MESH STORAGE
+    // Track lighting strips running along ceiling
+    const trackLightGeo = new THREE.BoxGeometry(0.35, 0.08, 0.8);
+    const trackLightMat = new THREE.MeshBasicMaterial({ color: 0xfffae0 });
+    for (let i = 0; i < 30; i++) {
+      const t = i / 30;
+      const pt = tunnelSpline.getPointAt(t);
+      const lightMesh = new THREE.Mesh(trackLightGeo, trackLightMat);
+      lightMesh.position.set(pt.x, tunnelHeight - 0.04, pt.z);
+      scene.add(lightMesh);
+    }
+
+    // TEXTURE LOADER & PAINTING MESHES
     const textureLoader = new THREE.TextureLoader();
     const paintingMeshes: THREE.Group[] = [];
 
-    // Helper to generate canvas texture for museum wall plaque
-    const createPlaqueTexture = (title: string, collection: string) => {
+    // Canvas texture for museum wall plaque
+    const createPlaqueTexture = (title: string, colTitle: string) => {
       const canvas = document.createElement('canvas');
       canvas.width = 512;
       canvas.height = 256;
@@ -226,64 +325,47 @@ export default function Gallery3D({
       if (ctx) {
         ctx.fillStyle = '#f8f8fa';
         ctx.fillRect(0, 0, 512, 256);
-        ctx.strokeStyle = '#e0e0e4';
+        ctx.strokeStyle = '#dcdce0';
         ctx.lineWidth = 4;
         ctx.strokeRect(4, 4, 504, 248);
 
         ctx.fillStyle = '#18181b';
-        ctx.font = 'bold 28px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-        ctx.fillText(title.slice(0, 24).toUpperCase(), 32, 64);
+        ctx.font = 'bold 26px -apple-system, sans-serif';
+        ctx.fillText(title.slice(0, 26).toUpperCase(), 28, 62);
 
         ctx.fillStyle = '#71717a';
-        ctx.font = '20px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-        ctx.fillText('MAYOWA ALABI (SHUTABUG)', 32, 108);
+        ctx.font = '20px -apple-system, sans-serif';
+        ctx.fillText('MAYOWA ALABI (SHUTABUG)', 28, 106);
 
         ctx.fillStyle = '#a1a1aa';
-        ctx.font = '18px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-        ctx.fillText(`Series: ${collection}`, 32, 148);
-        ctx.fillText('Archival Pigment Print • 2026', 32, 184);
+        ctx.font = '18px -apple-system, sans-serif';
+        ctx.fillText(`Series: ${colTitle}`, 28, 146);
+        ctx.fillText('Fine Art Archival Print • 2026', 28, 182);
 
         ctx.fillStyle = '#18181b';
-        ctx.font = 'bold 22px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-        ctx.fillText('From $50.00 • Inquire / Purchase →', 32, 224);
+        ctx.font = 'bold 22px -apple-system, sans-serif';
+        ctx.fillText('From $50.00 • Inquire / Buy →', 28, 222);
       }
-      const texture = new THREE.CanvasTexture(canvas);
-      texture.anisotropy = 4;
-      return texture;
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.anisotropy = 4;
+      return tex;
     };
 
-    // Helper canvas texture for fallback/loading
-    const createPlaceholderTexture = (title: string) => {
-      const canvas = document.createElement('canvas');
-      canvas.width = 512;
-      canvas.height = 700;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.fillStyle = '#e4e4e7';
-        ctx.fillRect(0, 0, 512, 700);
-        ctx.fillStyle = '#a1a1aa';
-        ctx.font = 'bold 24px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText(title.slice(0, 18), 256, 350);
-      }
-      return new THREE.CanvasTexture(canvas);
-    };
+    // POPULATE PAINTINGS ON LEFT AND RIGHT WALLS OF THE TUNNEL
+    exhibitionItems.forEach((item, index) => {
+      const { artwork, wallSide, t } = item;
+      const pt = tunnelSpline.getPointAt(t);
+      const tan = tunnelSpline.getTangentAt(t);
+      const norm = new THREE.Vector3().crossVectors(tan, upVector).normalize();
 
-    // POPULATE PAINTINGS ON CURVED WALL
-    exhibitionArtworks.forEach((item, index) => {
-      const { artwork } = item;
-      const theta = index * angleStep;
-
-      // Group holding painting, frame, shadow, and museum plaque
       const group = new THREE.Group();
 
-      // Painting frame dimensions
-      const printHeight = 3.6;
+      const printHeight = 2.8;
       const printWidth = printHeight * (artwork.ratio || 0.72);
 
-      // 1. Sleek black wood museum frame
-      const frameThickness = 0.12;
-      const frameDepth = 0.1;
+      // Frame
+      const frameThickness = 0.09;
+      const frameDepth = 0.08;
       const frameGeo = new THREE.BoxGeometry(
         printWidth + frameThickness * 2,
         printHeight + frameThickness * 2,
@@ -291,130 +373,165 @@ export default function Gallery3D({
       );
       const frameMat = new THREE.MeshStandardMaterial({
         color: 0x18181b,
-        roughness: 0.6,
-        metalness: 0.1,
+        roughness: 0.5,
       });
       const frameMesh = new THREE.Mesh(frameGeo, frameMat);
       frameMesh.castShadow = true;
       group.add(frameMesh);
 
-      // 2. White archival mat board bevel
+      // Mat Board
       const matGeo = new THREE.PlaneGeometry(
-        printWidth + frameThickness * 0.8,
-        printHeight + frameThickness * 0.8
+        printWidth + frameThickness * 0.7,
+        printHeight + frameThickness * 0.7
       );
-      const matMaterial = new THREE.MeshStandardMaterial({
-        color: 0xfdfdfd,
+      const matMat = new THREE.MeshStandardMaterial({
+        color: 0xfbfbfb,
         roughness: 0.95,
       });
-      const matMesh = new THREE.Mesh(matGeo, matMaterial);
-      matMesh.position.z = frameDepth / 2 + 0.005;
+      const matMesh = new THREE.Mesh(matGeo, matMat);
+      matMesh.position.z = frameDepth / 2 + 0.003;
       group.add(matMesh);
 
-      // 3. Artwork Canvas Mesh
+      // Painting Canvas
       const artGeo = new THREE.PlaneGeometry(printWidth, printHeight);
-      const placeholderTex = createPlaceholderTexture(artwork.title);
       const artMat = new THREE.MeshStandardMaterial({
-        map: placeholderTex,
+        color: 0xdddddd,
         roughness: 0.4,
-        metalness: 0.05,
       });
 
-      // Load actual image texture
+      // Load texture
       textureLoader.load(
         artwork.src,
         (loadedTex) => {
           loadedTex.colorSpace = THREE.SRGBColorSpace;
           loadedTex.anisotropy = 8;
+          artMat.color.set(0xffffff);
           artMat.map = loadedTex;
           artMat.needsUpdate = true;
         },
         undefined,
-        () => {
-          // Keep placeholder on error
-        }
+        () => {}
       );
 
       const artMesh = new THREE.Mesh(artGeo, artMat);
-      artMesh.position.z = frameDepth / 2 + 0.01;
-      artMesh.userData = { artwork, index };
+      artMesh.position.z = frameDepth / 2 + 0.008;
+      artMesh.userData = { artwork, index, t };
       group.add(artMesh);
 
-      // 4. Museum Placard / Label next to artwork
-      const plaqueWidth = 1.1;
-      const plaqueHeight = 0.55;
+      // Museum Wall Plaque beside painting
+      const plaqueWidth = 0.9;
+      const plaqueHeight = 0.45;
       const plaqueGeo = new THREE.PlaneGeometry(plaqueWidth, plaqueHeight);
       const plaqueMat = new THREE.MeshStandardMaterial({
         map: createPlaqueTexture(artwork.title, artwork.collectionTitle),
         roughness: 0.8,
       });
       const plaqueMesh = new THREE.Mesh(plaqueGeo, plaqueMat);
-      plaqueMesh.position.set(printWidth / 2 + plaqueWidth / 2 + 0.25, -printHeight / 2 + 0.35, 0.02);
+      plaqueMesh.position.set(
+        printWidth / 2 + plaqueWidth / 2 + 0.2,
+        -printHeight / 2 + 0.28,
+        0.01
+      );
       group.add(plaqueMesh);
 
-      // Position along the curved wall
-      // The inner wall is at galleryRadius, so paintings are slightly offset inward
-      const r = galleryRadius - 0.2;
-      group.position.x = r * Math.sin(theta);
-      group.position.z = -r * Math.cos(theta);
-      group.position.y = 0.2; // comfortable eye level
-      group.rotation.y = theta; // Face inward towards center
+      // Spot light over this painting
+      const artSpot = new THREE.SpotLight(0xfffaea, 1.2, 12, Math.PI / 4, 0.4);
+      artSpot.position.set(0, 2.2, 1.5);
+      artSpot.target = artMesh;
+      group.add(artSpot);
 
-      group.userData = { artwork, index, theta };
+      // Position on LEFT or RIGHT wall
+      const wallOffset = wallSide === 'right' ? tunnelHalfWidth - 0.12 : -tunnelHalfWidth + 0.12;
+      const pos = pt.clone().add(norm.clone().multiplyScalar(wallOffset));
+      pos.y = 2.0; // Eye level height on wall
+      group.position.copy(pos);
+
+      // Orient painting to face directly INTO the tunnel center
+      const inwardNormal = wallSide === 'right' ? norm.clone().negate() : norm.clone();
+      const lookTarget = pos.clone().add(inwardNormal);
+      group.lookAt(lookTarget);
+
+      group.userData = { artwork, index, t, wallSide };
       scene.add(group);
       paintingMeshes.push(group);
     });
 
-    // RAYCASTER FOR INTERACTIVE HOVER & CLICKS
+    // RAYCASTER FOR HOVER & INTERACTION
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
 
-    // INTERACTION HANDLERS
-    const onPointerDown = (e: MouseEvent | TouchEvent) => {
-      const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    // INTERACTIVE CONTROLS (MOUSE LOOK & WALKING)
+    const onMouseDown = (e: MouseEvent) => {
       stateRef.current.isPointerDown = true;
-      stateRef.current.pointerStartX = clientX;
-      stateRef.current.lastPointerX = clientX;
-      stateRef.current.velocity = 0;
-      setIsDragging(true);
+      stateRef.current.startX = e.clientX;
+      stateRef.current.startY = e.clientY;
+      stateRef.current.lastX = e.clientX;
+      stateRef.current.lastY = e.clientY;
     };
 
-    const onPointerMove = (e: MouseEvent | TouchEvent) => {
-      const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-      const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
-
-      // Update pointer vector for raycasting
+    const onMouseMove = (e: MouseEvent) => {
       const rect = container.getBoundingClientRect();
-      pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
-      pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+      pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
 
       if (stateRef.current.isPointerDown) {
-        const deltaX = clientX - stateRef.current.lastPointerX;
-        stateRef.current.lastPointerX = clientX;
+        const deltaX = e.clientX - stateRef.current.lastX;
+        const deltaY = e.clientY - stateRef.current.lastY;
+        stateRef.current.lastX = e.clientX;
+        stateRef.current.lastY = e.clientY;
 
-        // Sensitivity factor for natural panoramic sweep
-        const sensitivity = 0.0035;
-        stateRef.current.targetAngle -= deltaX * sensitivity;
-        stateRef.current.velocity = -deltaX * sensitivity;
+        // Mouse look yaw & pitch
+        stateRef.current.targetYaw -= deltaX * 0.004;
+        stateRef.current.targetPitch -= deltaY * 0.003;
+        // Clamp pitch to avoid flipping
+        stateRef.current.targetPitch = Math.max(
+          -0.45,
+          Math.min(0.45, stateRef.current.targetPitch)
+        );
+      } else {
+        // Subtle gaze follow when hovering
+        const normX = (e.clientX - rect.left) / rect.width - 0.5;
+        const normY = (e.clientY - rect.top) / rect.height - 0.5;
+        stateRef.current.targetYaw = -normX * 0.7; // Look up to ~40 degrees left/right
+        stateRef.current.targetPitch = -normY * 0.35;
       }
     };
 
-    const onPointerUp = () => {
+    const onMouseUp = () => {
       stateRef.current.isPointerDown = false;
-      setIsDragging(false);
     };
 
+    // SCROLL WHEEL = WALK FORWARD / BACKWARD IN TUNNEL
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
-      const sensitivity = 0.0018;
-      stateRef.current.targetAngle += delta * sensitivity;
-      stateRef.current.velocity = delta * sensitivity * 0.5;
+      const delta = Math.abs(e.deltaY) > Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+      // Scroll moves player along tunnel
+      const walkSpeed = 0.00045;
+      stateRef.current.targetProgress += delta * walkSpeed;
+      stateRef.current.velocity = delta * walkSpeed * 0.35;
     };
 
+    // KEYBOARD VIDEO GAME WALKING: W / S / ArrowUp / ArrowDown
+    const onKeyDown = (e: KeyboardEvent) => {
+      const walkStep = 0.012;
+      if (e.key === 'KeyW' || e.key === 'ArrowUp') {
+        stateRef.current.targetProgress += walkStep;
+      } else if (e.key === 'KeyS' || e.key === 'ArrowDown') {
+        stateRef.current.targetProgress -= walkStep;
+      } else if (e.key === 'KeyA' || e.key === 'ArrowLeft') {
+        stateRef.current.targetYaw += 0.15;
+      } else if (e.key === 'KeyD' || e.key === 'ArrowRight') {
+        stateRef.current.targetYaw -= 0.15;
+      } else if (e.key === 'Enter' || e.key === 'Space') {
+        if (activeArtwork) {
+          onSelectArtwork(activeArtwork);
+        }
+      }
+    };
+
+    // CLICK ON PAINTINGS TO VIEW
     const onClick = (e: MouseEvent) => {
-      // If user was dragging significantly, ignore click
-      if (Math.abs(e.clientX - stateRef.current.pointerStartX) > 8) return;
+      if (Math.abs(e.clientX - stateRef.current.startX) > 8) return; // Ignore drag
 
       const rect = container.getBoundingClientRect();
       pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
@@ -427,7 +544,6 @@ export default function Gallery3D({
       );
 
       if (intersects.length > 0) {
-        // Find top group
         let hitGroup: THREE.Object3D | null = intersects[0].object;
         while (hitGroup && !hitGroup.userData?.artwork && hitGroup.parent) {
           hitGroup = hitGroup.parent;
@@ -435,84 +551,96 @@ export default function Gallery3D({
 
         if (hitGroup && hitGroup.userData?.artwork) {
           const artwork: ArtworkPrint = hitGroup.userData.artwork;
-          const theta = hitGroup.userData.theta;
+          const targetT = hitGroup.userData.t;
 
-          // Smoothly align targetAngle to face this artwork perfectly
-          stateRef.current.targetAngle = theta;
-
-          // Select this artwork!
+          // Smoothly walk up to this painting
+          stateRef.current.targetProgress = targetT;
           onSelectArtwork(artwork);
         }
       }
     };
 
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowRight' || e.key === 'KeyD') {
-        stateRef.current.targetAngle += angleStep;
-      } else if (e.key === 'ArrowLeft' || e.key === 'KeyA') {
-        stateRef.current.targetAngle -= angleStep;
-      } else if (e.key === 'Enter' || e.key === 'Space') {
-        if (activeArtwork) {
-          onSelectArtwork(activeArtwork);
-        }
-      }
+    // Touch support for mobile walking & look
+    let touchStartY = 0;
+    const onTouchStart = (e: TouchEvent) => {
+      touchStartY = e.touches[0].clientY;
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      const deltaY = touchStartY - e.touches[0].clientY;
+      touchStartY = e.touches[0].clientY;
+      stateRef.current.targetProgress += deltaY * 0.0007;
     };
 
-    // Attach listeners
-    container.addEventListener('mousedown', onPointerDown);
-    window.addEventListener('mousemove', onPointerMove);
-    window.addEventListener('mouseup', onPointerUp);
-    container.addEventListener('touchstart', onPointerDown, { passive: true });
-    window.addEventListener('touchmove', onPointerMove, { passive: true });
-    window.addEventListener('touchend', onPointerUp);
+    container.addEventListener('mousedown', onMouseDown);
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
     container.addEventListener('wheel', onWheel, { passive: false });
-    container.addEventListener('click', onClick);
     window.addEventListener('keydown', onKeyDown);
+    container.addEventListener('click', onClick);
+    container.addEventListener('touchstart', onTouchStart, { passive: true });
+    container.addEventListener('touchmove', onTouchMove, { passive: true });
 
-    // Initial positioning if initialCollectionId passed
+    // Initial positioning if collection passed
     if (initialCollectionId) {
-      const foundIdx = exhibitionArtworks.findIndex(
-        (item) => item.artwork.collectionId === initialCollectionId
+      const found = exhibitionItems.find(
+        (it) => it.artwork.collectionId === initialCollectionId
       );
-      if (foundIdx !== -1) {
-        stateRef.current.currentAngle = foundIdx * angleStep;
-        stateRef.current.targetAngle = foundIdx * angleStep;
+      if (found) {
+        stateRef.current.progress = found.t;
+        stateRef.current.targetProgress = found.t;
       }
     }
 
-    // ANIMATION LOOP
+    // ANIMATION & FIRST PERSON WALKING LOOP
     let animationFrameId: number;
 
     const animate = () => {
       animationFrameId = requestAnimationFrame(animate);
 
-      // Inertia physics & smooth dampening
+      // Inertia & velocity dampening
       if (!stateRef.current.isPointerDown) {
-        stateRef.current.targetAngle += stateRef.current.velocity;
-        stateRef.current.velocity *= 0.92; // Friction decay
+        stateRef.current.targetProgress += stateRef.current.velocity;
+        stateRef.current.velocity *= 0.91;
       }
 
-      // Smooth lerp towards target angle
-      stateRef.current.currentAngle +=
-        (stateRef.current.targetAngle - stateRef.current.currentAngle) * 0.08;
+      // Smooth progress lerp
+      stateRef.current.progress +=
+        (stateRef.current.targetProgress - stateRef.current.progress) * 0.08;
 
-      const angle = stateRef.current.currentAngle;
+      // Keep progress normalized in [0, 1)
+      const p = ((stateRef.current.progress % 1) + 1) % 1;
+      setCurrentProgressPct(p);
 
-      // Update camera orientation: rotating around Y axis inside rotunda
-      camera.rotation.y = angle;
+      // Smooth yaw and pitch lerp
+      stateRef.current.yaw +=
+        (stateRef.current.targetYaw - stateRef.current.yaw) * 0.08;
+      stateRef.current.pitch +=
+        (stateRef.current.targetPitch - stateRef.current.pitch) * 0.08;
 
-      // Update spotlight position to point towards the direction camera is facing
-      spotlight.position.x = Math.sin(angle) * 3;
-      spotlight.position.z = -Math.cos(angle) * 3;
-      spotlight.target.position.set(
-        Math.sin(angle) * galleryRadius,
-        0,
-        -Math.cos(angle) * galleryRadius
-      );
-      spotlight.target.updateMatrixWorld();
+      // POSITION CAMERA AT CURRENT WALKING SPOT
+      const eyeHeight = 1.85;
+      const camPos = tunnelSpline.getPointAt(p);
+      camPos.y = eyeHeight;
+      camera.position.copy(camPos);
 
-      // Compass UI update
-      setCompassAngle((angle * 180) / Math.PI);
+      // CAMERA FORWARD TANGENT
+      const tangent = tunnelSpline.getTangentAt(p);
+      const norm = new THREE.Vector3().crossVectors(tangent, upVector).normalize();
+
+      // Look direction: combines spline tangent with user mouse look yaw & pitch
+      const lookDir = tangent
+        .clone()
+        .applyAxisAngle(upVector, stateRef.current.yaw)
+        .add(new THREE.Vector3(0, stateRef.current.pitch, 0))
+        .normalize();
+
+      const lookTarget = camPos.clone().add(lookDir.clone().multiplyScalar(15));
+      camera.lookAt(lookTarget);
+
+      // Spotlight follows ahead of camera
+      followSpotlight.position.copy(camPos.clone().add(new THREE.Vector3(0, 1.5, 0)));
+      followSpotlight.target.position.copy(lookTarget);
+      followSpotlight.target.updateMatrixWorld();
 
       // Raycast for hover detection
       raycaster.setFromCamera(pointer, camera);
@@ -532,23 +660,28 @@ export default function Gallery3D({
           container.style.cursor = 'pointer';
         }
       } else {
-        container.style.cursor = stateRef.current.isPointerDown ? 'grabbing' : 'grab';
+        container.style.cursor = 'grab';
       }
       setHoveredPrint(foundHover);
 
-      // Find which artwork is currently in center of view
-      // Normalize angle to [0, 2PI)
-      const normalizedAngle =
-        ((angle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
-      const closestIdx = Math.round(normalizedAngle / angleStep) % numPaintings;
+      // Determine active artwork currently being walked past
+      let closestItem = exhibitionItems[0];
+      let minDiff = 1;
 
-      if (
-        exhibitionArtworks[closestIdx] &&
-        exhibitionArtworks[closestIdx].artwork.id !== activeArtwork?.id
-      ) {
-        const item = exhibitionArtworks[closestIdx];
-        setActiveArtwork(item.artwork);
-        const col = ART_COLLECTIONS.find((c) => c.id === item.artwork.collectionId);
+      exhibitionItems.forEach((item) => {
+        let diff = Math.abs(item.t - p);
+        if (diff > 0.5) diff = 1 - diff;
+        if (diff < minDiff) {
+          minDiff = diff;
+          closestItem = item;
+        }
+      });
+
+      if (closestItem && closestItem.artwork.id !== activeArtwork?.id) {
+        setActiveArtwork(closestItem.artwork);
+        const col = ART_COLLECTIONS.find(
+          (c) => c.id === closestItem.artwork.collectionId
+        );
         if (col) setActiveCollection(col);
       }
 
@@ -558,7 +691,7 @@ export default function Gallery3D({
 
     animate();
 
-    // RESIZE HANDLER
+    // RESIZE
     const onResize = () => {
       if (!container) return;
       const w = container.clientWidth;
@@ -572,52 +705,48 @@ export default function Gallery3D({
     // CLEANUP
     return () => {
       cancelAnimationFrame(animationFrameId);
-      container.removeEventListener('mousedown', onPointerDown);
-      window.removeEventListener('mousemove', onPointerMove);
-      window.removeEventListener('mouseup', onPointerUp);
-      container.removeEventListener('touchstart', onPointerDown);
-      window.removeEventListener('touchmove', onPointerMove);
-      window.removeEventListener('touchend', onPointerUp);
+      container.removeEventListener('mousedown', onMouseDown);
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
       container.removeEventListener('wheel', onWheel);
-      container.removeEventListener('click', onClick);
       window.removeEventListener('keydown', onKeyDown);
+      container.removeEventListener('click', onClick);
+      container.removeEventListener('touchstart', onTouchStart);
+      container.removeEventListener('touchmove', onTouchMove);
       window.removeEventListener('resize', onResize);
 
-      // Dispose Three.js objects
       scene.clear();
       renderer.dispose();
-      wallGeo.dispose();
-      wallMat.dispose();
       floorGeo.dispose();
       floorMat.dispose();
+      leftWallGeo.dispose();
+      rightWallGeo.dispose();
+      wallMat.dispose();
       ceilingGeo.dispose();
       ceilingMat.dispose();
     };
-  }, [exhibitionArtworks, onSelectArtwork, initialCollectionId, activeArtwork?.id]);
+  }, [exhibitionItems, onSelectArtwork, initialCollectionId, activeArtwork?.id]);
 
-  // Quick navigation to step left or right
-  const stepGallery = (direction: 'left' | 'right') => {
-    const angleStep = (Math.PI * 2) / exhibitionArtworks.length;
-    stateRef.current.targetAngle += direction === 'right' ? angleStep : -angleStep;
-  };
-
-  // Jump to specific collection
+  // Jump to specific collection along tunnel
   const jumpToCollection = (colId: string) => {
-    const angleStep = (Math.PI * 2) / exhibitionArtworks.length;
-    const idx = exhibitionArtworks.findIndex((item) => item.artwork.collectionId === colId);
-    if (idx !== -1) {
-      stateRef.current.targetAngle = idx * angleStep;
+    const item = exhibitionItems.find((it) => it.artwork.collectionId === colId);
+    if (item) {
+      stateRef.current.targetProgress = item.t;
     }
   };
 
+  // Step walk buttons
+  const stepWalk = (direction: 'forward' | 'backward') => {
+    stateRef.current.targetProgress += direction === 'forward' ? 0.035 : -0.035;
+  };
+
   return (
-    <div className='relative w-full h-[88vh] min-h-[600px] overflow-hidden select-none bg-[#f0f0f2]'>
-      {/* 3D WebGL Canvas Container */}
+    <div className='relative w-full h-[90vh] min-h-[640px] overflow-hidden select-none bg-[#f0f0f2]'>
+      {/* 3D WebGL Canvas */}
       <div ref={mountRef} className='w-full h-full' />
 
-      {/* TOP CONTROLS BAR: Collection Pills */}
+      {/* TOP CONTROLS: Collections Navigator Pills */}
       <div className='absolute top-4 left-0 right-0 z-20 flex items-center justify-between px-6 pointer-events-none'>
-        {/* Left: Collections selector pills */}
         <div className='pointer-events-auto flex items-center gap-2 overflow-x-auto py-1 max-w-[70vw] no-scrollbar'>
           {ART_COLLECTIONS.slice(0, 8).map((col) => {
             const isSelected = activeCollection?.id === col.id;
@@ -637,12 +766,12 @@ export default function Gallery3D({
           })}
         </div>
 
-        {/* Right Utility Buttons: Audio toggle & Fullscreen */}
+        {/* Audio & Fullscreen Buttons */}
         <div className='pointer-events-auto flex items-center gap-2'>
           <button
             onClick={toggleAudio}
             className='p-2.5 rounded-full bg-white/80 hover:bg-white text-zinc-700 hover:text-black shadow-sm border border-zinc-200/60 backdrop-blur-md transition-all'
-            title={isAudioEnabled ? 'Mute Gallery Ambiance' : 'Enable Gallery Ambiance'}
+            title={isAudioEnabled ? 'Mute Gallery Sound' : 'Enable Gallery Sound'}
           >
             {isAudioEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
           </button>
@@ -656,56 +785,67 @@ export default function Gallery3D({
         </div>
       </div>
 
-      {/* SIDE ARROW NAVIGATION BUTTONS */}
+      {/* STEP WALK BUTTONS ON SIDES */}
       <button
-        onClick={() => stepGallery('left')}
-        className='absolute left-4 top-1/2 -translate-y-1/2 z-20 p-3 rounded-full bg-white/75 hover:bg-white text-zinc-800 shadow-md border border-zinc-200/80 backdrop-blur-md transition-all hover:scale-110 active:scale-95'
-        aria-label='Previous Artwork'
+        onClick={() => stepWalk('backward')}
+        className='absolute left-4 top-1/2 -translate-y-1/2 z-20 p-3 rounded-full bg-white/80 hover:bg-white text-zinc-800 shadow-md border border-zinc-200/80 backdrop-blur-md transition-all hover:scale-110 active:scale-95'
+        title='Walk Backward (S / Down)'
       >
         <ChevronLeft size={22} />
       </button>
 
       <button
-        onClick={() => stepGallery('right')}
-        className='absolute right-4 top-1/2 -translate-y-1/2 z-20 p-3 rounded-full bg-white/75 hover:bg-white text-zinc-800 shadow-md border border-zinc-200/80 backdrop-blur-md transition-all hover:scale-110 active:scale-95'
-        aria-label='Next Artwork'
+        onClick={() => stepWalk('forward')}
+        className='absolute right-4 top-1/2 -translate-y-1/2 z-20 p-3 rounded-full bg-white/80 hover:bg-white text-zinc-800 shadow-md border border-zinc-200/80 backdrop-blur-md transition-all hover:scale-110 active:scale-95'
+        title='Walk Forward (W / Up)'
       >
         <ChevronRight size={22} />
       </button>
 
-      {/* HOVER TOOLTIP FLOATER */}
-      {hoveredPrint && !isDragging && (
+      {/* HOVER TOOLTIP */}
+      {hoveredPrint && (
         <div className='pointer-events-none absolute bottom-32 left-1/2 -translate-x-1/2 z-30 bg-zinc-950/85 text-white px-4 py-2 rounded-full backdrop-blur-md shadow-xl text-xs flex items-center gap-2 border border-white/10 animate-fade-in'>
           <Eye size={14} className='text-amber-400' />
-          <span>Click to view: <strong className='font-semibold'>{hoveredPrint.title}</strong></span>
+          <span>
+            Click to examine:{' '}
+            <strong className='font-semibold'>{hoveredPrint.title}</strong>
+          </span>
           <span className='text-zinc-400'>• From ${hoveredPrint.basePrice}</span>
         </div>
       )}
 
       {/* BOTTOM CENTER: EXACT MATCH TO VIDEO SCREEN */}
-      {/* "MATCH DAY - 26/27", "THE BEAUTIFUL GAME", "KERESIMESI (CHRISTMAS)" */}
-      {/* with "ENTER THE COLLECTION →" and counts */}
+      {/* "YOU ARE WALKING PAST", SERIES TITLE, "ENTER THE COLLECTION →" */}
       <div className='absolute bottom-6 left-0 right-0 z-20 flex flex-col items-center justify-center pointer-events-none text-center px-4'>
-        <div className='pointer-events-auto flex flex-col items-center bg-white/85 backdrop-blur-md px-8 py-3.5 rounded-2xl shadow-lg border border-zinc-200/80 transition-all hover:shadow-xl'>
-          <div className='text-[10px] uppercase tracking-[0.25em] text-zinc-500 font-bold mb-0.5'>
-            You are walking past
+        <div className='pointer-events-auto flex flex-col items-center bg-white/90 backdrop-blur-md px-8 py-3.5 rounded-2xl shadow-lg border border-zinc-200/80 transition-all hover:shadow-xl'>
+          <div className='text-[10px] uppercase tracking-[0.25em] text-zinc-500 font-bold mb-0.5 flex items-center gap-1.5'>
+            <Sparkles size={11} className='text-amber-500' />
+            <span>You Are Walking Past</span>
           </div>
+
           <h2 className='text-xl sm:text-2xl font-black uppercase tracking-tight text-zinc-900'>
-            {activeCollection?.title || 'The Exhibition'}
+            {activeCollection?.title || 'Exhibition Tunnel'}
           </h2>
+
           {activeArtwork && (
             <p className='text-xs text-zinc-600 font-medium mt-0.5'>
-              Focused: <span className='text-zinc-900 font-semibold'>{activeArtwork.title}</span> • By {activeArtwork.artist}
+              Artwork:{' '}
+              <span className='text-zinc-900 font-semibold'>
+                {activeArtwork.title}
+              </span>{' '}
+              • By {activeArtwork.artist}
             </p>
           )}
 
-          <div className='flex items-center gap-3 mt-2'>
+          <div className='flex items-center gap-3 mt-2.5'>
             <button
               onClick={() => activeArtwork && onSelectArtwork(activeArtwork)}
               className='px-4 py-1.5 bg-zinc-900 text-white hover:bg-black text-xs font-semibold uppercase tracking-wider rounded-full shadow-sm hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5'
             >
-              <span>View Art & Buy Print</span>
-              <span className='text-amber-400'>${activeArtwork?.basePrice || 50}</span>
+              <span>View Print & Buy</span>
+              <span className='text-amber-400'>
+                ${activeArtwork?.basePrice || 50}
+              </span>
             </button>
 
             {onEnterCollection && activeCollection && (
@@ -720,30 +860,36 @@ export default function Gallery3D({
         </div>
       </div>
 
-      {/* BOTTOM RIGHT: EXACT NAVIGATION HINT FROM VIDEO */}
-      {/* "DRAG OR SCROLL TO WALK" with circular compass reticle */}
-      <div className='absolute bottom-6 right-6 z-20 hidden sm:flex items-center gap-2.5 pointer-events-none text-zinc-600 bg-white/70 backdrop-blur-md px-3.5 py-2 rounded-full border border-zinc-200/60 shadow-sm'>
-        <div
-          className='w-5 h-5 flex items-center justify-center transition-transform duration-100 ease-out'
-          style={{ transform: `rotate(${-compassAngle}deg)` }}
-        >
-          <Compass size={18} className='text-zinc-700' />
+      {/* BOTTOM RIGHT: VIDEO GAME WALKING INSTRUCTIONS & RADAR */}
+      <div className='absolute bottom-6 right-6 z-20 hidden sm:flex items-center gap-3 pointer-events-none text-zinc-600 bg-white/80 backdrop-blur-md px-4 py-2.5 rounded-2xl border border-zinc-200/60 shadow-sm'>
+        {/* Live Tunnel Progress Radar */}
+        <div className='relative w-7 h-7 rounded-full border-2 border-zinc-300 flex items-center justify-center'>
+          <div
+            className='absolute w-2 h-2 rounded-full bg-amber-500 shadow-sm transition-all duration-100'
+            style={{
+              transform: `rotate(${currentProgressPct * 360}deg) translate(9px) rotate(-${
+                currentProgressPct * 360
+              }deg)`,
+            }}
+          />
+          <MapPin size={10} className='text-zinc-400' />
         </div>
-        <span className='text-[11px] font-semibold tracking-wider uppercase text-zinc-700'>
-          Drag or Scroll to Walk
-        </span>
+
+        <div className='text-left'>
+          <div className='text-[10px] font-bold uppercase tracking-wider text-zinc-800'>
+            Scroll or W / S to Walk
+          </div>
+          <div className='text-[9px] text-zinc-500'>
+            Move mouse to look at left & right walls
+          </div>
+        </div>
       </div>
 
-      {/* BOTTOM LEFT: HINT / KEYBOARD CONTROLS */}
-      <div className='absolute bottom-6 left-6 z-20 hidden lg:flex items-center gap-2 pointer-events-none text-zinc-500 bg-white/70 backdrop-blur-md px-3 py-1.5 rounded-full border border-zinc-200/60 text-[11px] font-medium'>
-        <MoveHorizontal size={14} />
-        <span>Use Drag, Mouse Wheel or ← → Keys</span>
+      {/* BOTTOM LEFT: SHORTCUTS BADGE */}
+      <div className='absolute bottom-6 left-6 z-20 hidden lg:flex items-center gap-2 pointer-events-none text-zinc-500 bg-white/70 backdrop-blur-md px-3.5 py-2 rounded-full border border-zinc-200/60 text-[11px] font-medium'>
+        <Move size={13} className='text-zinc-600' />
+        <span>First-Person Gallery Walkway Mode</span>
       </div>
     </div>
   );
 }
-
-// Dynamic track spotlights and gallery ambient lighting updates
-// Interactive raycasting detection for mouse hover and click-to-zoom
-// Fluid inertial scrolling with momentum physics and compass orientation
-// Web Audio API synthesized gallery room acoustics and ambiance control
