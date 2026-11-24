@@ -4242,3 +4242,4 @@ export function getCollectionById(id: string): ArtCollection | undefined {
 
 // Archival Paper and Sizing configuration for museum prints
 // Handcrafted solid wood framing specifications and shadowbox canvas
+// Global multi-currency support: USD ($), GBP (£), EUR (€), NGN (₦)
