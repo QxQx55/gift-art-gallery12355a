@@ -746,3 +746,4 @@ export default function Gallery3D({
 // Dynamic track spotlights and gallery ambient lighting updates
 // Interactive raycasting detection for mouse hover and click-to-zoom
 // Fluid inertial scrolling with momentum physics and compass orientation
+// Web Audio API synthesized gallery room acoustics and ambiance control
