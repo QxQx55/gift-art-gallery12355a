@@ -10,11 +10,7 @@ import {
   Eye,
   MapPin,
   Sparkles,
-  MousePointer,
-  DoorOpen,
-  ArrowRight,
-  UserCheck,
-  Footprints
+  MousePointer
 } from 'lucide-react';
 
 interface Gallery3DProps {
@@ -29,23 +25,17 @@ export default function Gallery3D({
   initialCollectionId,
 }: Gallery3DProps) {
   const mountRef = useRef<HTMLDivElement>(null);
-  const radarDotRef = useRef<HTMLDivElement | null>(null);
   const [activeArtwork, setActiveArtwork] = useState<ArtworkPrint | null>(null);
   const [activeCollection, setActiveCollection] = useState(ART_COLLECTIONS[0]);
   const [isAudioEnabled, setIsAudioEnabled] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [hoveredPrint, setHoveredPrint] = useState<ArtworkPrint | null>(null);
-  const [isAtGate, setIsAtGate] = useState(true);
-  const [currentArtworkIndex, setCurrentArtworkIndex] = useState(0);
-  // OPTIONAL Face-to-Face toggle - disabled by default so walking is 100% free & unbroken!
-  const [isFaceToFaceMode, setIsFaceToFaceMode] = useState(false);
+  const [currentProgressPct, setCurrentProgressPct] = useState(0);
 
-  // State reference - pure, stable, zero camera hijacking, physics-based velocity
+  // State reference - simple, stable, zero-garbage
   const stateRef = useRef({
-    progress: 0.992,
-    targetProgress: 0.992,
-    hasTarget: false,
-    velocity: 0,
+    progress: 0,
+    targetProgress: 0,
     isPointerDown: false,
     startX: 0,
     startY: 0,
@@ -54,18 +44,9 @@ export default function Gallery3D({
     mouseNormX: 0,
     mouseNormY: 0,
     keys: new Set<string>(),
-    artworkIndex: 0,
-    isFaceToFace: false, // controlled explicitly by user, never hijacked automatically!
-    activeArtId: '',
-    isAtGate: true,
   });
 
-  // Keep stateRef.isFaceToFace synced with isFaceToFaceMode
-  useEffect(() => {
-    stateRef.current.isFaceToFace = isFaceToFaceMode;
-  }, [isFaceToFaceMode]);
-
-  // 36 Curated Artworks placed alternately along Left & Right Walls
+  // Exhibition artworks list
   const exhibitionItems = React.useMemo(() => {
     const list: {
       artwork: ArtworkPrint;
@@ -79,49 +60,17 @@ export default function Gallery3D({
     const total = prints.length;
 
     prints.forEach((p, idx) => {
-      const t = 0.05 + (idx / total) * 0.9;
       list.push({
         artwork: p,
         collectionId: p.collectionId,
         collectionTitle: p.collectionTitle,
         wallSide: idx % 2 === 0 ? 'right' : 'left',
-        t,
+        t: idx / total,
       });
     });
 
     return list;
   }, []);
-
-  // Step walk to next/previous artwork stop
-  const stepToArtwork = useCallback((direction: 'next' | 'prev') => {
-    const total = exhibitionItems.length;
-    let nextIdx: number;
-
-    if (direction === 'next') {
-      nextIdx = (stateRef.current.artworkIndex + 1) % total;
-    } else {
-      nextIdx = (stateRef.current.artworkIndex - 1 + total) % total;
-    }
-
-    stateRef.current.artworkIndex = nextIdx;
-    setCurrentArtworkIndex(nextIdx);
-
-    const targetItem = exhibitionItems[nextIdx];
-    if (targetItem) {
-      stateRef.current.targetProgress = targetItem.t;
-      stateRef.current.hasTarget = true;
-      stateRef.current.velocity = 0;
-      setActiveArtwork(targetItem.artwork);
-      const col = ART_COLLECTIONS.find((c) => c.id === targetItem.artwork.collectionId);
-      if (col) setActiveCollection(col);
-      setIsAtGate(false);
-    }
-  }, [exhibitionItems]);
-
-  // Toggle optional Face-to-Face view
-  const toggleFaceToFace = () => {
-    setIsFaceToFaceMode((prev) => !prev);
-  };
 
   // Web Audio Ambiance
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -178,17 +127,17 @@ export default function Gallery3D({
     const container = mountRef.current;
     if (!container) return;
 
-    // SCENE SETUP
+    // SCENE SETUP - Clean, light architectural aesthetic
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xf0f0f3);
-    scene.fog = new THREE.FogExp2(0xf0f0f3, 0.012);
+    scene.background = new THREE.Color(0xf1f1f3);
+    scene.fog = new THREE.FogExp2(0xf1f1f3, 0.012);
 
-    // CAMERA
+    // CAMERA - Stable, comfortable eye-level
     const width = container.clientWidth;
     const height = container.clientHeight;
     const camera = new THREE.PerspectiveCamera(52, width / height, 0.1, 140);
 
-    // RENDERER
+    // RENDERER - Maximum responsiveness, no heavy multi-pass
     const renderer = new THREE.WebGLRenderer({
       antialias: true,
       powerPreference: 'high-performance',
@@ -200,7 +149,7 @@ export default function Gallery3D({
     container.innerHTML = '';
     container.appendChild(renderer.domElement);
 
-    // BALANCED LIGHTING
+    // BALANCED LIGHTING (Bright, shadowless for high framerate)
     const ambientLight = new THREE.AmbientLight(0xffffff, 1.25);
     scene.add(ambientLight);
 
@@ -209,6 +158,7 @@ export default function Gallery3D({
     scene.add(dirLight);
 
     // BUILD THE CURVED TUNNEL SPLINE PATH
+    // Gentle sweeping curved corridor
     const tunnelControlPoints = [
       new THREE.Vector3(0, 0, 0),
       new THREE.Vector3(28, 0, 16),
@@ -230,7 +180,7 @@ export default function Gallery3D({
       0.5
     );
 
-    const tunnelHalfWidth = 4.2;
+    const tunnelHalfWidth = 4.0; // Roomy corridor width
     const tunnelHeight = 5.4;
     const upVector = new THREE.Vector3(0, 1, 0);
 
@@ -319,115 +269,11 @@ export default function Gallery3D({
     const ceilingMat = new THREE.MeshBasicMaterial({ color: 0xfbfbfd, side: THREE.DoubleSide });
     scene.add(new THREE.Mesh(ceilingGeo, ceilingMat));
 
-    // ==========================================
-    // 🏛️ GRAND ART-DECORATED MAIN ENTRANCE GATE
-    // ==========================================
-    const gatePoint = tunnelSpline.getPointAt(0);
-    const gateTan = tunnelSpline.getTangentAt(0);
-    const grandGateGroup = new THREE.Group();
-    grandGateGroup.position.copy(gatePoint);
-    grandGateGroup.lookAt(gatePoint.clone().add(gateTan));
-
-    const pillarWidth = 0.85;
-    const pillarDepth = 0.85;
-    const pillarHeight = tunnelHeight + 0.3;
-    const pillarGeo = new THREE.BoxGeometry(pillarWidth, pillarHeight, pillarDepth);
-    const pillarMat = new THREE.MeshStandardMaterial({
-      color: 0x141416,
-      roughness: 0.25,
-      metalness: 0.4,
-    });
-
-    const goldMat = new THREE.MeshStandardMaterial({
-      color: 0xd4af37,
-      roughness: 0.2,
-      metalness: 0.85,
-    });
-
-    // Left Pillar
-    const leftPillar = new THREE.Mesh(pillarGeo, pillarMat);
-    leftPillar.position.set(-tunnelHalfWidth + 0.35, pillarHeight / 2, 0);
-    grandGateGroup.add(leftPillar);
-
-    const goldRingGeo = new THREE.BoxGeometry(pillarWidth + 0.1, 0.15, pillarDepth + 0.1);
-    const leftGoldCapital = new THREE.Mesh(goldRingGeo, goldMat);
-    leftGoldCapital.position.set(-tunnelHalfWidth + 0.35, pillarHeight - 0.15, 0);
-    grandGateGroup.add(leftGoldCapital);
-
-    // Right Pillar
-    const rightPillar = new THREE.Mesh(pillarGeo, pillarMat);
-    rightPillar.position.set(tunnelHalfWidth - 0.35, pillarHeight / 2, 0);
-    grandGateGroup.add(rightPillar);
-
-    const rightGoldCapital = new THREE.Mesh(goldRingGeo, goldMat);
-    rightGoldCapital.position.set(tunnelHalfWidth - 0.35, pillarHeight - 0.15, 0);
-    grandGateGroup.add(rightGoldCapital);
-
-    // Lintel Archway
-    const archSpan = tunnelHalfWidth * 2 - 0.2;
-    const lintelHeight = 1.35;
-    const lintelGeo = new THREE.BoxGeometry(archSpan, lintelHeight, 0.65);
-    const lintelMesh = new THREE.Mesh(lintelGeo, pillarMat);
-    lintelMesh.position.set(0, tunnelHeight - lintelHeight / 2 + 0.15, 0);
-    grandGateGroup.add(lintelMesh);
-
-    // Lintel Banner Canvas
-    const gateBannerCanvas = document.createElement('canvas');
-    gateBannerCanvas.width = 1024;
-    gateBannerCanvas.height = 256;
-    const gctx = gateBannerCanvas.getContext('2d');
-    if (gctx) {
-      gctx.fillStyle = '#0f0f11';
-      gctx.fillRect(0, 0, 1024, 256);
-      gctx.strokeStyle = '#d4af37';
-      gctx.lineWidth = 6;
-      gctx.strokeRect(12, 12, 1000, 232);
-      gctx.strokeRect(20, 20, 984, 216);
-
-      gctx.fillStyle = '#f8f8fa';
-      gctx.font = '900 38px -apple-system, sans-serif';
-      gctx.textAlign = 'center';
-      gctx.letterSpacing = '8px';
-      gctx.fillText('SHUTABUG ART GALLERY', 512, 98);
-
-      gctx.fillStyle = '#d4af37';
-      gctx.font = '700 22px -apple-system, sans-serif';
-      gctx.letterSpacing = '6px';
-      gctx.fillText('MAYOWA ALABI • THE 2026 RETROSPECTIVE', 512, 148);
-
-      gctx.fillStyle = '#a1a1aa';
-      gctx.font = '600 16px -apple-system, sans-serif';
-      gctx.letterSpacing = '4px';
-      gctx.fillText('ENTER THE CORRIDOR TO EXPERIENCE ORIGINAL ARCHIVAL PRINTS', 512, 192);
-    }
-
-    const gateBannerTex = new THREE.CanvasTexture(gateBannerCanvas);
-    const gateBannerGeo = new THREE.PlaneGeometry(archSpan - 0.4, lintelHeight - 0.25);
-    const gateBannerMat = new THREE.MeshBasicMaterial({ map: gateBannerTex });
-
-    const frontBannerMesh = new THREE.Mesh(gateBannerGeo, gateBannerMat);
-    frontBannerMesh.position.set(0, tunnelHeight - lintelHeight / 2 + 0.15, -0.34);
-    frontBannerMesh.rotation.y = Math.PI;
-    grandGateGroup.add(frontBannerMesh);
-
-    // Velvet carpet
-    const carpetGeo = new THREE.PlaneGeometry(3.6, 12);
-    const carpetMat = new THREE.MeshStandardMaterial({
-      color: 0x881337,
-      roughness: 0.9,
-    });
-    const carpetMesh = new THREE.Mesh(carpetGeo, carpetMat);
-    carpetMesh.rotation.x = -Math.PI / 2;
-    carpetMesh.position.set(0, 0.015, 2.5);
-    grandGateGroup.add(carpetMesh);
-
-    scene.add(grandGateGroup);
-
-    // STATIC CLICK TARGET ARRAY
+    // STATIC CLICK TARGET ARRAY (NO GC IN ANIMATE LOOP)
     const clickableMeshes: THREE.Mesh[] = [];
-    const paintingPositions: { pos: THREE.Vector3; wallSide: 'left' | 'right'; t: number; index: number }[] = [];
     const textureLoader = new THREE.TextureLoader();
 
+    // Reusable materials & geometries
     const frameGeo = new THREE.BoxGeometry(2.35, 3.15, 0.08);
     const frameMat = new THREE.MeshBasicMaterial({ color: 0x18181b });
     const matGeo = new THREE.PlaneGeometry(2.22, 3.02);
@@ -435,6 +281,7 @@ export default function Gallery3D({
     const artGeo = new THREE.PlaneGeometry(2.1, 2.9);
     const plaqueGeo = new THREE.PlaneGeometry(0.85, 0.42);
 
+    // Canvas plaque generator
     const createPlaqueTexture = (title: string, colTitle: string) => {
       const canvas = document.createElement('canvas');
       canvas.width = 512;
@@ -476,13 +323,16 @@ export default function Gallery3D({
 
       const group = new THREE.Group();
 
+      // Outer frame
       const frameMesh = new THREE.Mesh(frameGeo, frameMat);
       group.add(frameMesh);
 
+      // Inner white mat border
       const matMesh = new THREE.Mesh(matGeo, matMat);
       matMesh.position.z = 0.041;
       group.add(matMesh);
 
+      // Artwork canvas
       const artMat = new THREE.MeshBasicMaterial({ color: 0xeeeeee });
       textureLoader.load(
         artwork.src,
@@ -502,6 +352,7 @@ export default function Gallery3D({
       group.add(artMesh);
       clickableMeshes.push(artMesh);
 
+      // Plaque beside painting
       const plaqueMat = new THREE.MeshBasicMaterial({
         map: createPlaqueTexture(artwork.title, artwork.collectionTitle),
       });
@@ -509,13 +360,13 @@ export default function Gallery3D({
       plaqueMesh.position.set(1.15 + 0.85 / 2 + 0.15, -0.9, 0.01);
       group.add(plaqueMesh);
 
+      // Mount on left or right wall
       const wallOffset = wallSide === 'right' ? tunnelHalfWidth - 0.08 : -tunnelHalfWidth + 0.08;
       const pos = pt.clone().add(norm.clone().multiplyScalar(wallOffset));
-      pos.y = 2.1;
+      pos.y = 2.1; // Comfortable museum viewing height
       group.position.copy(pos);
 
-      paintingPositions.push({ pos, wallSide, t, index });
-
+      // Point into the corridor center
       const inwardNormal = wallSide === 'right' ? norm.clone().negate() : norm.clone();
       const lookTarget = pos.clone().add(inwardNormal);
       group.lookAt(lookTarget);
@@ -523,19 +374,18 @@ export default function Gallery3D({
       scene.add(group);
     });
 
-    // RAYCASTER
+    // RAYCASTER (PRE-ALLOCATED)
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
 
-    // 100% UNBROKEN, FLUID VIDEO-GAME MOUSE & WALKING CONTROLS
+    // INTUITIVE, SMOOTH CONTROL LISTENERS
+    // 1. Mouse Drag: drag up/down or left/right to glide smoothly through the gallery!
     const onMouseDown = (e: MouseEvent) => {
-      if ((e.target as HTMLElement)?.closest('button')) return;
       stateRef.current.isPointerDown = true;
       stateRef.current.startX = e.clientX;
       stateRef.current.startY = e.clientY;
       stateRef.current.lastX = e.clientX;
       stateRef.current.lastY = e.clientY;
-      stateRef.current.hasTarget = false;
       container.style.cursor = 'grabbing';
     };
 
@@ -546,7 +396,7 @@ export default function Gallery3D({
       pointer.x = normX;
       pointer.y = normY;
 
-      // Natural, pleasant mouse look glance (normX > 0 looks right, normY > 0 looks up)
+      // Subtle, gentle head look without fighting the cursor
       stateRef.current.mouseNormX = normX;
       stateRef.current.mouseNormY = normY;
 
@@ -555,19 +405,8 @@ export default function Gallery3D({
         const deltaY = e.clientY - stateRef.current.lastY;
         stateRef.current.lastX = e.clientX;
         stateRef.current.lastY = e.clientY;
-
-        // Moving mouse/dragging automatically exits face-to-face mode if active
-        if (stateRef.current.isFaceToFace && (Math.abs(deltaX) > 4 || Math.abs(deltaY) > 4)) {
-          stateRef.current.isFaceToFace = false;
-          setIsFaceToFaceMode(false);
-        }
-
-        // Dragging UP (-deltaY) pushes you FORWARD along the corridor!
-        // Dragging DOWN (+deltaY) pulls you BACKWARD!
-        // Dragging LEFT/RIGHT also walks/pans!
-        const forwardPush = -deltaY * 0.00028 - deltaX * 0.00018;
-        stateRef.current.velocity += forwardPush;
-        stateRef.current.hasTarget = false;
+        // Direct, effortless mouse drag: dragging forward/up or left walks forward, dragging down or right walks back
+        stateRef.current.targetProgress += (-deltaY * 0.0014 - deltaX * 0.0014);
       }
     };
 
@@ -576,34 +415,18 @@ export default function Gallery3D({
       container.style.cursor = 'grab';
     };
 
-    // Scroll wheel / touchpad = fluid, unbroken walk forward / backward with smooth inertia
+    // 2. Mouse Wheel: smooth, natural scroll to walk forward & backward
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      if (stateRef.current.isFaceToFace) {
-        stateRef.current.isFaceToFace = false;
-        setIsFaceToFaceMode(false);
-      }
-      stateRef.current.hasTarget = false;
-
-      // In browser wheel: scrolling down has positive deltaY
-      // Normalize wheel delta for mouse wheels (+/-100) vs smooth trackpads (+/-5)
-      const rawDelta = Math.abs(e.deltaY) > Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
-      const normalizedDelta = Math.sign(rawDelta) * Math.min(Math.abs(rawDelta), 100);
-
-      // Scroll forward pushes velocity forward
-      stateRef.current.velocity += normalizedDelta * 0.000045;
+      const delta = Math.abs(e.deltaY) > Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+      // Responsive, effortless walking rate
+      stateRef.current.targetProgress += delta * 0.0009;
     };
 
+    // 3. Keyboard: W / S / Up / Down / Left / Right
     const onKeyDown = (e: KeyboardEvent) => {
       stateRef.current.keys.add(e.code);
-
-      if (e.key === 'ArrowLeft') {
-        e.preventDefault();
-        stepToArtwork('prev');
-      } else if (e.key === 'ArrowRight') {
-        e.preventDefault();
-        stepToArtwork('next');
-      } else if (e.key === 'Enter' || e.key === 'Space') {
+      if (e.key === 'Enter' || e.key === 'Space') {
         if (activeArtwork) {
           onSelectArtwork(activeArtwork);
         }
@@ -614,51 +437,35 @@ export default function Gallery3D({
       stateRef.current.keys.delete(e.code);
     };
 
+    // 4. Click: Raycast directly against clickableMeshes
     const onClick = (e: MouseEvent) => {
       if (
-        Math.hypot(e.clientX - stateRef.current.startX, e.clientY - stateRef.current.startY) > 8
+        Math.abs(e.clientX - stateRef.current.startX) > 6 ||
+        Math.abs(e.clientY - stateRef.current.startY) > 6
       )
-        return;
+        return; // Skip if dragged
 
       raycaster.setFromCamera(pointer, camera);
       const hits = raycaster.intersectObjects(clickableMeshes, false);
 
       if (hits.length > 0) {
         const hit = hits[0].object;
-        if (hit.userData?.artwork && typeof hit.userData.index === 'number') {
-          const idx = hit.userData.index;
-          stateRef.current.artworkIndex = idx;
+        if (hit.userData?.artwork) {
           stateRef.current.targetProgress = hit.userData.t;
-          stateRef.current.hasTarget = true;
-          stateRef.current.velocity = 0;
-          setCurrentArtworkIndex(idx);
           onSelectArtwork(hit.userData.artwork);
-          return;
         }
       }
-
-      // If clicked on open corridor / floor: walk forward a step!
-      stateRef.current.velocity += 0.0035;
-      stateRef.current.hasTarget = false;
     };
 
+    // 5. Touch swipe for mobile
     let touchStartX = 0;
-    let touchStartY = 0;
     const onTouchStart = (e: TouchEvent) => {
       touchStartX = e.touches[0].clientX;
-      touchStartY = e.touches[0].clientY;
-      stateRef.current.hasTarget = false;
     };
     const onTouchMove = (e: TouchEvent) => {
       const deltaX = touchStartX - e.touches[0].clientX;
-      const deltaY = touchStartY - e.touches[0].clientY;
       touchStartX = e.touches[0].clientX;
-      touchStartY = e.touches[0].clientY;
-      if (stateRef.current.isFaceToFace) {
-        stateRef.current.isFaceToFace = false;
-        setIsFaceToFaceMode(false);
-      }
-      stateRef.current.velocity += deltaY * 0.0003 + deltaX * 0.0003;
+      stateRef.current.targetProgress += deltaX * 0.0016;
     };
 
     container.addEventListener('mousedown', onMouseDown);
@@ -672,137 +479,75 @@ export default function Gallery3D({
     container.addEventListener('touchmove', onTouchMove, { passive: true });
 
     if (initialCollectionId) {
-      const foundIdx = exhibitionItems.findIndex(
+      const found = exhibitionItems.find(
         (it) => it.artwork.collectionId === initialCollectionId
       );
-      if (foundIdx !== -1) {
-        stateRef.current.artworkIndex = foundIdx;
-        stateRef.current.targetProgress = exhibitionItems[foundIdx].t;
-        stateRef.current.hasTarget = true;
-        stateRef.current.velocity = 0;
-        setCurrentArtworkIndex(foundIdx);
+      if (found) {
+        stateRef.current.progress = found.t;
+        stateRef.current.targetProgress = found.t;
       }
     }
 
-    // ANIMATION LOOP - 100% UNBROKEN, FREE WALKING WITH PHYSICS VELOCITY
+    // ANIMATION LOOP (SOLID 60-120 FPS, ZERO JITTER)
     let animationFrameId: number;
     let lastRaycastTime = 0;
-
-    const smoothLookTarget = new THREE.Vector3();
 
     const animate = (timestamp: number) => {
       animationFrameId = requestAnimationFrame(animate);
 
+      // Smooth keyboard walking
       const keys = stateRef.current.keys;
       const isShift = keys.has('ShiftLeft') || keys.has('ShiftRight');
+      const keyStep = (isShift ? 0.003 : 0.0016);
 
       if (keys.has('KeyW') || keys.has('ArrowUp')) {
-        if (stateRef.current.isFaceToFace) {
-          stateRef.current.isFaceToFace = false;
-          setIsFaceToFaceMode(false);
-        }
-        stateRef.current.velocity += isShift ? 0.0007 : 0.00035;
-        stateRef.current.hasTarget = false;
+        stateRef.current.targetProgress += keyStep;
       }
       if (keys.has('KeyS') || keys.has('ArrowDown')) {
-        if (stateRef.current.isFaceToFace) {
-          stateRef.current.isFaceToFace = false;
-          setIsFaceToFaceMode(false);
-        }
-        stateRef.current.velocity -= isShift ? 0.0007 : 0.00035;
-        stateRef.current.hasTarget = false;
+        stateRef.current.targetProgress -= keyStep;
+      }
+      if (keys.has('KeyA') || keys.has('ArrowLeft')) {
+        stateRef.current.targetProgress -= keyStep * 0.8;
+      }
+      if (keys.has('KeyD') || keys.has('ArrowRight')) {
+        stateRef.current.targetProgress += keyStep * 0.8;
       }
 
-      // Shortest cyclic path if navigating to a specific target artwork
-      if (stateRef.current.hasTarget) {
-        let diff = stateRef.current.targetProgress - stateRef.current.progress;
-        while (diff > 0.5) diff -= 1;
-        while (diff < -0.5) diff += 1;
+      // Smooth, fluid camera progress damping
+      stateRef.current.progress +=
+        (stateRef.current.targetProgress - stateRef.current.progress) * 0.12;
 
-        if (Math.abs(diff) < 0.0004) {
-          stateRef.current.progress = stateRef.current.targetProgress;
-          stateRef.current.hasTarget = false;
-        } else {
-          stateRef.current.progress += diff * 0.12;
-        }
-      } else {
-        // Free fluid walking with smooth friction decay
-        stateRef.current.velocity = Math.max(-0.012, Math.min(0.012, stateRef.current.velocity));
-        stateRef.current.progress += stateRef.current.velocity;
-        stateRef.current.velocity *= 0.88;
-        if (Math.abs(stateRef.current.velocity) < 0.000005) {
-          stateRef.current.velocity = 0;
-        }
-      }
+      const p = ((stateRef.current.progress % 1) + 1) % 1;
+      setCurrentProgressPct(p);
 
-      // Always normalize progress strictly between 0 and 1
-      stateRef.current.progress = ((stateRef.current.progress % 1) + 1) % 1;
-      const p = stateRef.current.progress;
-
-      // Update radar without React re-render overhead
-      if (radarDotRef.current) {
-        radarDotRef.current.style.transform = `rotate(${p * 360}deg) translate(9px) rotate(-${p * 360}deg)`;
-      }
-
-      // Check gate state only on change
-      const atGate = p < 0.04 || p > 0.965;
-      if (atGate !== stateRef.current.isAtGate) {
-        stateRef.current.isAtGate = atGate;
-        setIsAtGate(atGate);
-      }
-
-      // CAMERA POSITION (Stays smoothly in corridor centerline at eye-level)
+      // CAMERA POSITION (Stable eye-level along corridor centerline)
       const eyeHeight = 2.0;
       const camPos = tunnelSpline.getPointAt(p);
       camPos.y = eyeHeight;
       camera.position.copy(camPos);
 
-      // CAMERA GAZE
+      // CAMERA FORWARD GAZE (Follows the natural curving tunnel ahead)
       const forwardTangent = tunnelSpline.getTangentAt(p);
+      const lookOffsetDist = 12.0;
+
+      // Subtle, stable mouse parallax (doesn't fight cursor or make user dizzy)
+      const lookTarget = camPos
+        .clone()
+        .add(forwardTangent.clone().multiplyScalar(lookOffsetDist));
+
+      // Gentle horizontal glance left or right toward the walls
       const corridorNormal = new THREE.Vector3()
         .crossVectors(forwardTangent, upVector)
         .normalize();
 
-      // Find closest artwork stop
-      let closestItem = exhibitionItems[0];
-      let closestIdx = 0;
-      let minDiff = 1;
-
-      exhibitionItems.forEach((item, idx) => {
-        let diff = Math.abs(item.t - p);
-        if (diff > 0.5) diff = 1 - diff;
-        if (diff < minDiff) {
-          minDiff = diff;
-          closestItem = item;
-          closestIdx = idx;
-        }
-      });
-
-      // Default: 100% Free corridor look, follows user's mouse
-      const forwardLookTarget = camPos
-        .clone()
-        .add(forwardTangent.clone().multiplyScalar(12.0));
-
-      // Natural mouse look: move mouse right -> look right, move mouse left -> look left
-      forwardLookTarget.add(
-        corridorNormal.clone().multiplyScalar(stateRef.current.mouseNormX * 3.5)
+      lookTarget.add(
+        corridorNormal.clone().multiplyScalar(-stateRef.current.mouseNormX * 3.2)
       );
-      forwardLookTarget.y += stateRef.current.mouseNormY * 1.0;
+      lookTarget.y += stateRef.current.mouseNormY * 0.8;
 
-      let targetGazePoint = forwardLookTarget;
+      camera.lookAt(lookTarget);
 
-      // ONLY if user explicitly enabled Face-to-Face mode, look directly at the painting
-      if (stateRef.current.isFaceToFace && !atGate) {
-        const artStop = paintingPositions[closestIdx];
-        if (artStop) {
-          targetGazePoint = artStop.pos.clone();
-        }
-      }
-
-      smoothLookTarget.lerp(targetGazePoint, 0.12);
-      camera.lookAt(smoothLookTarget);
-
-      // Throttled raycasting for hover
+      // Throttled hover detection (only 10 times a second, completely eliminates raycast lag)
       if (timestamp - lastRaycastTime > 90) {
         lastRaycastTime = timestamp;
         raycaster.setFromCamera(pointer, camera);
@@ -821,12 +566,21 @@ export default function Gallery3D({
         }
       }
 
-      // Update active artwork card only when artwork actually changes
-      if (closestItem && closestItem.artwork.id !== stateRef.current.activeArtId) {
-        stateRef.current.activeArtId = closestItem.artwork.id;
-        stateRef.current.artworkIndex = closestIdx;
+      // Determine active artwork closest to current position
+      let closestItem = exhibitionItems[0];
+      let minDiff = 1;
+
+      exhibitionItems.forEach((item) => {
+        let diff = Math.abs(item.t - p);
+        if (diff > 0.5) diff = 1 - diff;
+        if (diff < minDiff) {
+          minDiff = diff;
+          closestItem = item;
+        }
+      });
+
+      if (closestItem && closestItem.artwork.id !== activeArtwork?.id) {
         setActiveArtwork(closestItem.artwork);
-        setCurrentArtworkIndex(closestIdx);
         const col = ART_COLLECTIONS.find(
           (c) => c.id === closestItem.artwork.collectionId
         );
@@ -876,62 +630,30 @@ export default function Gallery3D({
       matMat.dispose();
       artGeo.dispose();
       plaqueGeo.dispose();
-      pillarGeo.dispose();
-      pillarMat.dispose();
-      goldMat.dispose();
-      carpetGeo.dispose();
-      carpetMat.dispose();
     };
-  }, [exhibitionItems, onSelectArtwork, initialCollectionId, activeArtwork?.id, stepToArtwork]);
+  }, [exhibitionItems, onSelectArtwork, initialCollectionId, activeArtwork?.id]);
 
   const jumpToCollection = (colId: string) => {
-    const itemIdx = exhibitionItems.findIndex((it) => it.artwork.collectionId === colId);
-    if (itemIdx !== -1) {
-      stateRef.current.artworkIndex = itemIdx;
-      stateRef.current.targetProgress = exhibitionItems[itemIdx].t;
-      stateRef.current.hasTarget = true;
-      stateRef.current.velocity = 0;
-      setCurrentArtworkIndex(itemIdx);
-      if (stateRef.current.isFaceToFace) {
-        stateRef.current.isFaceToFace = false;
-        setIsFaceToFaceMode(false);
-      }
+    const item = exhibitionItems.find((it) => it.artwork.collectionId === colId);
+    if (item) {
+      stateRef.current.targetProgress = item.t;
     }
   };
 
-  const walkThroughGate = () => {
-    stateRef.current.targetProgress = 0.05;
-    stateRef.current.hasTarget = true;
-    stateRef.current.velocity = 0;
-    if (stateRef.current.isFaceToFace) {
-      stateRef.current.isFaceToFace = false;
-      setIsFaceToFaceMode(false);
-    }
+  const stepWalk = (direction: 'forward' | 'backward') => {
+    stateRef.current.targetProgress += direction === 'forward' ? 0.05 : -0.05;
   };
 
   return (
-    <div className='relative w-full h-[90vh] min-h-[640px] overflow-hidden select-none bg-[#f0f0f3] cursor-grab active:cursor-grabbing'>
+    <div className='relative w-full h-[90vh] min-h-[640px] overflow-hidden select-none bg-[#f1f1f3] cursor-grab active:cursor-grabbing'>
       {/* 3D WebGL Canvas */}
       <div ref={mountRef} className='w-full h-full' />
 
-      {/* TOP CONTROLS: Collection Tabs & Return to Gate */}
+      {/* TOP CONTROLS: Collection Tabs */}
       <div className='absolute top-4 left-0 right-0 z-20 flex items-center justify-between px-6 pointer-events-none'>
         <div className='pointer-events-auto flex items-center gap-2 overflow-x-auto py-1 max-w-[70vw] no-scrollbar'>
-          <button
-            onClick={() => {
-              stateRef.current.targetProgress = 0.992;
-              stateRef.current.hasTarget = true;
-              stateRef.current.velocity = 0;
-              setIsFaceToFaceMode(false);
-            }}
-            className='px-3.5 py-1.5 text-xs uppercase tracking-wider font-bold rounded-full bg-amber-500 hover:bg-amber-600 text-white shadow-md transition-all flex items-center gap-1.5 whitespace-nowrap'
-          >
-            <DoorOpen size={13} />
-            <span>Main Gate</span>
-          </button>
-
           {ART_COLLECTIONS.slice(0, 8).map((col) => {
-            const isSelected = !isAtGate && activeCollection?.id === col.id;
+            const isSelected = activeCollection?.id === col.id;
             return (
               <button
                 key={col.id}
@@ -967,23 +689,21 @@ export default function Gallery3D({
         </div>
       </div>
 
-      {/* 🎯 "<" AND ">" BUTTONS: WALK SMOOTHLY FORWARD AND BACKWARD */}
+      {/* QUICK STEP BUTTONS ON SIDES */}
       <button
-        onClick={() => stepToArtwork('prev')}
-        className='absolute left-4 top-1/2 -translate-y-1/2 z-30 p-3.5 rounded-full bg-white/90 hover:bg-white text-zinc-900 shadow-xl border border-zinc-300 backdrop-blur-md transition-all hover:scale-110 active:scale-95 group'
-        title='Walk Backward Along Corridor'
-        aria-label='Walk Backward'
+        onClick={() => stepWalk('backward')}
+        className='absolute left-4 top-1/2 -translate-y-1/2 z-20 p-3 rounded-full bg-white/85 hover:bg-white text-zinc-800 shadow-md border border-zinc-200/80 backdrop-blur-md transition-all hover:scale-110 active:scale-95'
+        title='Walk Backward'
       >
-        <ChevronLeft size={24} className='group-hover:-translate-x-0.5 transition-transform' />
+        <ChevronLeft size={22} />
       </button>
 
       <button
-        onClick={() => stepToArtwork('next')}
-        className='absolute right-4 top-1/2 -translate-y-1/2 z-30 p-3.5 rounded-full bg-white/90 hover:bg-white text-zinc-900 shadow-xl border border-zinc-300 backdrop-blur-md transition-all hover:scale-110 active:scale-95 group'
-        title='Walk Forward Along Corridor'
-        aria-label='Walk Forward'
+        onClick={() => stepWalk('forward')}
+        className='absolute right-4 top-1/2 -translate-y-1/2 z-20 p-3 rounded-full bg-white/85 hover:bg-white text-zinc-800 shadow-md border border-zinc-200/80 backdrop-blur-md transition-all hover:scale-110 active:scale-95'
+        title='Walk Forward'
       >
-        <ChevronRight size={24} className='group-hover:translate-x-0.5 transition-transform' />
+        <ChevronRight size={22} />
       </button>
 
       {/* HOVER TOOLTIP */}
@@ -998,102 +718,60 @@ export default function Gallery3D({
         </div>
       )}
 
-      {/* BOTTOM CENTER: "YOU ARE WALKING PAST" WITH OPTIONAL FACE-TO-FACE TOGGLE */}
+      {/* BOTTOM CENTER: "YOU ARE WALKING PAST" (MATCHES VIDEO) */}
       <div className='absolute bottom-6 left-0 right-0 z-20 flex flex-col items-center justify-center pointer-events-none text-center px-4'>
-        {isAtGate ? (
-          /* ENTRANCE GATE CARD */
-          <div className='pointer-events-auto flex flex-col items-center bg-zinc-950/92 text-white backdrop-blur-md px-8 py-4 rounded-2xl shadow-2xl border border-amber-500/40 transition-all hover:border-amber-500'>
-            <div className='text-[10px] uppercase tracking-[0.25em] text-amber-400 font-bold mb-1 flex items-center gap-1.5'>
-              <Sparkles size={12} className='text-amber-400' />
-              <span>Grand Exhibition Portal</span>
-            </div>
+        <div className='pointer-events-auto flex flex-col items-center bg-white/92 backdrop-blur-md px-8 py-3.5 rounded-2xl shadow-xl border border-zinc-200/90 transition-all hover:shadow-2xl'>
+          <div className='text-[10px] uppercase tracking-[0.25em] text-zinc-500 font-bold mb-0.5 flex items-center gap-1.5'>
+            <Sparkles size={11} className='text-amber-500' />
+            <span>You Are Walking Past</span>
+          </div>
 
-            <h2 className='text-xl sm:text-2xl font-black uppercase tracking-tight text-white'>
-              Shutabug Gallery Main Gate
-            </h2>
+          <h2 className='text-xl sm:text-2xl font-black uppercase tracking-tight text-zinc-900'>
+            {activeCollection?.title || 'Exhibition Tunnel'}
+          </h2>
 
-            <p className='text-xs text-zinc-300 font-medium mt-1 max-w-md'>
-              Scroll or drag your mouse to walk freely through the grand entrance gate into the corridor exhibition.
+          {activeArtwork && (
+            <p className='text-xs text-zinc-600 font-medium mt-0.5'>
+              Artwork:{' '}
+              <span className='text-zinc-900 font-semibold'>
+                {activeArtwork.title}
+              </span>{' '}
+              • By {activeArtwork.artist}
             </p>
+          )}
 
+          <div className='flex items-center gap-3 mt-2.5'>
             <button
-              onClick={walkThroughGate}
-              className='mt-3 px-6 py-2 bg-amber-500 hover:bg-amber-400 text-zinc-950 text-xs font-black uppercase tracking-wider rounded-full shadow-lg hover:scale-105 active:scale-95 transition-all flex items-center gap-2'
+              onClick={() => activeArtwork && onSelectArtwork(activeArtwork)}
+              className='px-4 py-1.5 bg-zinc-900 text-white hover:bg-black text-xs font-semibold uppercase tracking-wider rounded-full shadow-sm hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5'
             >
-              <span>Step Through The Gate</span>
-              <ArrowRight size={14} />
-            </button>
-          </div>
-        ) : (
-          /* ACTIVE ARTWORK CARD WITH OPTIONAL FACE-TO-FACE BUTTON */
-          <div className='pointer-events-auto flex flex-col items-center bg-white/92 backdrop-blur-md px-8 py-3.5 rounded-2xl shadow-xl border border-zinc-200/90 transition-all hover:shadow-2xl'>
-            <div className='flex items-center gap-2 mb-0.5'>
-              <span className='text-[10px] uppercase tracking-[0.2em] text-zinc-500 font-bold flex items-center gap-1'>
-                <Sparkles size={11} className='text-amber-500' />
-                <span>You Are Walking Past</span>
+              <span>View Print & Buy</span>
+              <span className='text-amber-400'>
+                ${activeArtwork?.basePrice || 50}
               </span>
-            </div>
+            </button>
 
-            <h2 className='text-xl sm:text-2xl font-black uppercase tracking-tight text-zinc-900'>
-              {activeArtwork?.title || activeCollection?.title || 'Exhibition Corridor'}
-            </h2>
-
-            {activeArtwork && (
-              <p className='text-xs text-zinc-600 font-medium mt-0.5'>
-                Series:{' '}
-                <span className='text-zinc-900 font-semibold'>
-                  {activeArtwork.collectionTitle}
-                </span>{' '}
-                • {activeArtwork.artist} • Artwork {currentArtworkIndex + 1} of {exhibitionItems.length}
-              </p>
+            {onEnterCollection && activeCollection && (
+              <button
+                onClick={() => onEnterCollection(activeCollection.id)}
+                className='text-xs font-semibold text-zinc-700 hover:text-black tracking-wide underline underline-offset-4'
+              >
+                Enter Collection ({activeCollection.count} prints) →
+              </button>
             )}
-
-            <div className='flex items-center gap-2.5 mt-2.5'>
-              {/* Optional Face-to-Face view toggle */}
-              <button
-                onClick={toggleFaceToFace}
-                className={`px-3 py-1.5 text-xs font-semibold rounded-full border transition-all flex items-center gap-1.5 ${
-                  isFaceToFaceMode
-                    ? 'bg-amber-500 text-white border-amber-500 shadow-sm'
-                    : 'bg-zinc-100 hover:bg-zinc-200 text-zinc-700 border-zinc-200'
-                }`}
-                title='Optional: look directly at painting face-to-face'
-              >
-                {isFaceToFaceMode ? <Footprints size={13} /> : <UserCheck size={13} />}
-                <span>{isFaceToFaceMode ? 'Free Walk View' : 'Face-to-Face View'}</span>
-              </button>
-
-              <button
-                onClick={() => activeArtwork && onSelectArtwork(activeArtwork)}
-                className='px-4 py-1.5 bg-zinc-900 text-white hover:bg-black text-xs font-semibold uppercase tracking-wider rounded-full shadow-sm hover:scale-105 active:scale-95 transition-all flex items-center gap-1.5'
-              >
-                <span>Inquire & Buy Print</span>
-                <span className='text-amber-400'>
-                  ${activeArtwork?.basePrice || 50}
-                </span>
-              </button>
-
-              {onEnterCollection && activeCollection && (
-                <button
-                  onClick={() => onEnterCollection(activeCollection.id)}
-                  className='text-xs font-semibold text-zinc-700 hover:text-black tracking-wide underline underline-offset-4 hidden sm:inline-block'
-                >
-                  Collection ({activeCollection.count}) →
-                </button>
-              )}
-            </div>
           </div>
-        )}
+        </div>
       </div>
 
       {/* BOTTOM RIGHT: SMOOTH INSTRUCTIONS & RADAR */}
       <div className='absolute bottom-6 right-6 z-20 hidden sm:flex items-center gap-3 pointer-events-none text-zinc-600 bg-white/85 backdrop-blur-md px-4 py-2.5 rounded-2xl border border-zinc-200/80 shadow-md'>
         <div className='relative w-7 h-7 rounded-full border-2 border-zinc-300 flex items-center justify-center'>
           <div
-            ref={radarDotRef}
-            className='absolute w-2 h-2 rounded-full bg-amber-500 shadow-sm transition-transform duration-75'
+            className='absolute w-2 h-2 rounded-full bg-amber-500 shadow-sm transition-all duration-75'
             style={{
-              transform: 'rotate(0deg) translate(9px) rotate(0deg)',
+              transform: `rotate(${currentProgressPct * 360}deg) translate(9px) rotate(-${
+                currentProgressPct * 360
+              }deg)`,
             }}
           />
           <MapPin size={10} className='text-zinc-400' />
@@ -1102,10 +780,10 @@ export default function Gallery3D({
         <div className='text-left'>
           <div className='text-[10px] font-bold uppercase tracking-wider text-zinc-800 flex items-center gap-1.5'>
             <MousePointer size={11} className='text-zinc-600' />
-            <span>Scroll or Drag to Walk Freely</span>
+            <span>Scroll or Drag to Walk</span>
           </div>
           <div className='text-[9px] text-zinc-500'>
-            Mouse aims your gaze freely • Face-to-Face is optional
+            Click any painting on left or right wall
           </div>
         </div>
       </div>
