@@ -4239,3 +4239,5 @@ export function getPrintById(id: string): ArtworkPrint | undefined {
 export function getCollectionById(id: string): ArtCollection | undefined {
   return ART_COLLECTIONS.find(c => c.id === id);
 }
+
+// Archival Paper and Sizing configuration for museum prints
